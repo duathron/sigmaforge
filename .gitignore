@@ -16,6 +16,9 @@ build/
 # Vendored detection engine (cloned, not committed; Zircolite is not on PyPI)
 /Zircolite/
 
+# SigmaHQ rules (cloned shallow for the A1 spike; not committed)
+/sigma/
+
 # Large COMISET dataset slices (159.7 GB source; do not commit slices)
 /data/comiset/
 # Zircolite run artifacts

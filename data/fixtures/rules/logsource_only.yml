@@ -1,0 +1,17 @@
+title: A1 Logsource-Only Probe (process_creation admits any event)
+id: a1a1a1a1-0000-0000-0000-00000000a101
+status: experimental
+description: >
+    Logsource-only probe used by the Sigmaforge A1 gate. It carries no field
+    predicate on process attributes; it only requires that a process_creation
+    event (EventID 1) is admitted by the COMISET->Zircolite mapping/logsource.
+    If this fires zero times on the slice, the mapping or the logsource filter
+    is dropping every event and A1 must FAIL.
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        EventID: 1
+    condition: selection
+level: informational
