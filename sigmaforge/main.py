@@ -18,6 +18,48 @@ def classify(value: str) -> None:
     console.print(classify_input(value))
 
 
+@app.command()
+def backtest(
+    rules: str,
+    attack: str,
+    benign: str,
+    out: str,
+    mapping: str = "data/mappings/comiset.yaml",
+    workers: int = 4,
+    min_events: int = 1000,
+) -> None:
+    """Backtest Sigma rules: recall on the native-EVTX attack corpus, precision@COMISET on
+    the benign corpus. Writes the FP-tuning report to OUT. (Live end-to-end run; meaningful
+    precision numbers require the COMISET benign sample.)"""
+    import json
+    from pathlib import Path
+
+    import yaml
+
+    from sigmaforge.ingest.ruleload import partition_rules
+    from sigmaforge.ingest.zircolite_runner import run_shard
+    from sigmaforge.orchestrate import run_backtest
+
+    rule_docs = [
+        doc
+        for p in Path(rules).rglob("*.yml")
+        for doc in [yaml.safe_load(p.read_text())]
+        if isinstance(doc, dict) and doc.get("title")
+    ]
+    loaded, _excluded = partition_rules(rule_docs)
+    benign_events = [json.loads(line) for line in Path(benign).read_text().splitlines()]
+    attack_fires = set(run_shard(attack, rules, json_input=False, corpus_label="malicious"))
+    benign_fires = set(run_shard(benign, rules, mapping_path=mapping, json_input=True))
+    pc_fired = any(f.event_label == "malicious" for f in benign_fires)
+    _rows, _funnel, md = run_backtest(
+        loaded, attack_fires, benign_fires, benign_events,
+        n_attack_malicious=len(benign_events), positive_control_fired=pc_fired,
+        min_events=min_events,
+    )
+    Path(out).write_text(md)
+    console.print(f"report written: {out}")
+
+
 def main() -> None:
     app()
 
