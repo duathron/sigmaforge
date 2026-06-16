@@ -12,5 +12,6 @@ def test_chunk_is_true_partition():
 
 def test_chunk_size_must_be_positive():
     import pytest
+
     with pytest.raises(ValueError):
         list(chunk_lines(["a"], shard_size=0))

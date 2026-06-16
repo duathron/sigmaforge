@@ -9,7 +9,7 @@ def test_stateful_excluded_and_level_filtered():
         {"title": "low_rule", "level": "low", "detection": {"sel": {"Image": "y"}, "condition": "sel"}},
     ]
     loaded, excluded = partition_rules(rules, levels=("high", "critical"))
-    assert [r["title"] for r in loaded] == ["stateless_high"]      # low dropped by level; stateful dropped
-    assert {r["title"] for r in excluded} == {"corr", "count_cond"} # stateful, in-level, excluded
+    assert [r["title"] for r in loaded] == ["stateless_high"]  # low dropped by level; stateful dropped
+    assert {r["title"] for r in excluded} == {"corr", "count_cond"}  # stateful, in-level, excluded
     # low_rule is out-of-level: in NEITHER loaded nor excluded
     assert "low_rule" not in [r["title"] for r in loaded] + [r["title"] for r in excluded]

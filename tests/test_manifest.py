@@ -4,9 +4,13 @@ from sigmaforge.runmanifest import build_manifest, run_hash
 
 def test_manifest_pins_inputs():
     m = build_manifest(
-        zircolite_version="3.7.6", ruleset_sha="abc", mapping_hash="def",
-        corpus_hashes={"comiset": "h1"}, level=("high", "critical"),
-        shard_size=20, workers=4,
+        zircolite_version="3.7.6",
+        ruleset_sha="abc",
+        mapping_hash="def",
+        corpus_hashes={"comiset": "h1"},
+        level=("high", "critical"),
+        shard_size=20,
+        workers=4,
     )
     assert m["ruleset_sha"] == "abc" and m["level"] == ["high", "critical"]
 

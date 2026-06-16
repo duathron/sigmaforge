@@ -52,8 +52,12 @@ def backtest(
     benign_fires = set(run_shard(benign, rules, mapping_path=mapping, json_input=True))
     pc_fired = any(f.event_label == "malicious" for f in benign_fires)
     _rows, _funnel, md = run_backtest(
-        loaded, attack_fires, benign_fires, benign_events,
-        n_attack_malicious=len(benign_events), positive_control_fired=pc_fired,
+        loaded,
+        attack_fires,
+        benign_fires,
+        benign_events,
+        n_attack_malicious=len(benign_events),
+        positive_control_fired=pc_fired,
         min_events=min_events,
     )
     Path(out).write_text(md)

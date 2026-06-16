@@ -10,7 +10,6 @@ def test_aggregate_is_set_union_dedup():
 
 
 def _fake_shard_fn(shard):
-    # deterministic stand-in for a Zircolite run: fire r1 on every event id ending in 0
     return [MatchRecord("r1", e, "benign") for e in shard if e.endswith("0")]
 
 
@@ -18,5 +17,5 @@ def test_worker_count_invariance():
     items = [f"e{i}" for i in range(50)]
     r1 = backtest(items, shard_size=10, workers=1, shard_fn=_fake_shard_fn)
     r8 = backtest(items, shard_size=10, workers=8, shard_fn=_fake_shard_fn)
-    assert r1 == r8  # byte-identical aggregated set regardless of worker count
+    assert r1 == r8
     assert r1 == {MatchRecord("r1", e, "benign") for e in items if e.endswith("0")}

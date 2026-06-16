@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class MatchRecord:
     rule_id: str
     event_id: str
     event_label: str  # "benign" | "malicious"
+
 
 @dataclass
 class RuleScore:

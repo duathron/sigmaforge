@@ -2,8 +2,17 @@ from sigmaforge.report.render import render_report
 
 
 def test_report_has_funnel_site_label_and_tuning():
-    rows = [{"rule": "PowerShell Enc", "recall": 1.0, "precision@COMISET": 0.2,
-             "precision": 0.2, "tp": 5, "fp": 20, "events_evaluated": 50000}]
+    rows = [
+        {
+            "rule": "PowerShell Enc",
+            "recall": 1.0,
+            "precision@COMISET": 0.2,
+            "precision": 0.2,
+            "tp": 5,
+            "fp": 20,
+            "events_evaluated": 50000,
+        }
+    ]
     funnel = {"candidate": 100, "loaded": 95, "stateless": 90, "fires": 40, "survives_fp": 12}
     md = render_report(rows, funnel, source="COMISET", min_events=1000)
     assert "precision@COMISET" in md

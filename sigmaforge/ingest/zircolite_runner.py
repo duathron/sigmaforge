@@ -17,8 +17,13 @@ def parse_detections(detections: list[dict], corpus_label: str | None = None) ->
     return out
 
 
-def run_shard(events_path: str, ruleset_glob: str, mapping_path: str | None = None,
-              json_input: bool = True, corpus_label: str | None = None) -> list[MatchRecord]:
+def run_shard(
+    events_path: str,
+    ruleset_glob: str,
+    mapping_path: str | None = None,
+    json_input: bool = True,
+    corpus_label: str | None = None,
+) -> list[MatchRecord]:
     out = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
     cmd = [*ZIRCOLITE, "--events", events_path, "--ruleset", ruleset_glob, "--outfile", out]
     if json_input:

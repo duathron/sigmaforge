@@ -1,9 +1,7 @@
 def events_evaluated_for_rule(events: list[dict], selection_fields: set[str]) -> int:
     """A2 coverage counter: how many events actually carry ALL of a rule's selection fields
     (present + non-empty). Distinguishes 'low FP' from 'rule never ran'."""
-    return sum(
-        1 for e in events if all(e.get(f) not in (None, "") for f in selection_fields)
-    )
+    return sum(1 for e in events if all(e.get(f) not in (None, "") for f in selection_fields))
 
 
 def selection_fields(rule: dict) -> set[str]:

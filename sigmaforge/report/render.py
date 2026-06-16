@@ -1,5 +1,6 @@
-def render_report(rows: list[dict], funnel: dict, source: str = "COMISET",
-                  min_events: int = 1000, fp_tuning_threshold: int = 5) -> str:
+def render_report(
+    rows: list[dict], funnel: dict, source: str = "COMISET", min_events: int = 1000, fp_tuning_threshold: int = 5
+) -> str:
     """A10/A8: the deliverable. A human-readable FP-tuning report.
     Leads with the site-scope + noisy-label caveat; precision labelled precision@SOURCE."""
     lines = [
@@ -16,8 +17,13 @@ def render_report(rows: list[dict], funnel: dict, source: str = "COMISET",
     for stage in ("candidate", "loaded", "stateless", "fires", "survives_fp"):
         if stage in funnel:
             lines.append(f"- {stage}: {funnel[stage]}")
-    lines += ["", "## Per-rule", "", "| rule | recall | precision@" + source + " | tp | fp | events_evaluated |",
-              "|---|---|---|---|---|---|"]
+    lines += [
+        "",
+        "## Per-rule",
+        "",
+        "| rule | recall | precision@" + source + " | tp | fp | events_evaluated |",
+        "|---|---|---|---|---|---|",
+    ]
     for r in rows:
         lines.append(
             f"| {r.get('rule')} | {r.get('recall')} | {r.get('precision@' + source, r.get('precision'))} "
