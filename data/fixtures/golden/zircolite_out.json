@@ -1,0 +1,6 @@
+[
+  {"title": "r_lsass", "matches": [
+    {"sigmaforge_eid": "m1", "sigmaforge_label": "malicious"},
+    {"sigmaforge_eid": "m2", "sigmaforge_label": "malicious"}
+  ]}
+]

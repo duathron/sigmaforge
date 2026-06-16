@@ -1,0 +1,4 @@
+{
+  "corpus": {"n_malicious": 2, "n_benign": 8, "events_evaluated": 10},
+  "r_lsass": {"tp": 2, "fp": 0, "tn": 8, "fn": 0, "events_evaluated": 10}
+}
