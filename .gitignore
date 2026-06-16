@@ -15,3 +15,10 @@ build/
 
 # Vendored detection engine (cloned, not committed; Zircolite is not on PyPI)
 /Zircolite/
+
+# Large COMISET dataset slices (159.7 GB source; do not commit slices)
+/data/comiset/
+# Zircolite run artifacts
+/flattened_events_*.json
+/zircolite.log
+/detected_events.json

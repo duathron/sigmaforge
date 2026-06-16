@@ -1,0 +1,173 @@
+# =============================================================================
+# Zircolite field-mapping config for the COMISET (Comiset23) dataset
+# =============================================================================
+# Dataset : Comiset23_Lab_Environment_Dataset.zip -> dataset_comillas2.json
+#           JSONL (one JSON object per line), Elasticsearch export.
+# Envelope: each line = {"_index","_type","_id","_score","_source":{...}}.
+#           The real event fields live under "_source".
+#
+# HOW ZIRCOLITE FLATTENS THESE DOCS (verified empirically with --keepflat
+# against zircolite v3.7.6, see streaming.py::_flatten_event / _resolve_path):
+#   - The whole ES doc is walked. "_source" is just a nested dict, so every
+#     event field has the dotted raw path "_source.<field>"
+#     (e.g. "_source.process_path", "_source.z_elastic_ecs.event.code").
+#   - For each leaf, Zircolite looks up the FULL dotted raw path in the
+#     "mappings" table below. If found, the value is stored under the mapped
+#     name. If NOT found, the key is the LAST path segment with all
+#     non-alphanumeric chars stripped: re.sub(r"[^a-zA-Z0-9]", "", last_part).
+#       -> process_path  (unmapped) becomes  "processpath"
+#       -> host_name     (unmapped) becomes  "hostname"
+#       -> @timestamp    (unmapped) becomes  "timestamp"
+#       -> log_name      (unmapped) becomes  "logname"
+#   - So mapping keys MUST be the full dotted path WITH the "_source." prefix.
+#   - ES top-level keys also flatten: _index->index, _id->id, _score->score.
+#
+# REAL _source PATHS observed in Sysmon EventID=1 (Process Create) events
+# (channel "Microsoft-Windows-Sysmon/Operational"), and the Sigma field each
+# corresponds to. NOTE: this dataset's winlogbeat ingest pipeline RENAMED the
+# classic Sysmon fields Image/ParentImage to process_path/process_parent_path,
+# while CommandLine / ParentCommandLine kept their original Sysmon names.
+#
+#   Sigma field        REAL _source path                         normalized-if-unmapped
+#   -----------------  ----------------------------------------  ----------------------
+#   Image              _source.process_path                      processpath
+#   CommandLine        _source.CommandLine                       CommandLine
+#   ParentImage        _source.process_parent_path               processparentpath
+#   ParentCommandLine  _source.ParentCommandLine                 ParentCommandLine
+#   Computer (host)    _source.host_name                         hostname
+#   User               _source.user_account  (DOMAIN\user)       useraccount
+#   EventID            _source.event_id                          eventid
+#   Channel/logsource  _source.log_name                          logname
+#   OriginalFileName   _source.OriginalFileName                  OriginalFileName
+#   CurrentDirectory   _source.CurrentDirectory                  CurrentDirectory
+#   IntegrityLevel     _source.IntegrityLevel                    IntegrityLevel
+#   Hashes (combined)  _source.event_original_message contains   (parse separate
+#                      "Hashes=..."; individual hashes also at    hash_* fields)
+#                      _source.hash_md5/.hash_sha1/.hash_sha256/.hash_imphash
+#   ProcessGuid        _source.process_guid                      processguid
+#   ProcessId          _source.process_id                        processid
+#   ParentProcessGuid  _source.process_parent_guid               processparentguid
+#   ParentProcessId    _source.process_parent_id                 processparentid
+#   ParentUser         _source.ParentUser                        ParentUser
+#   UtcTime/@timestamp _source.@timestamp                        timestamp
+#   Provider           _source.source_name (= Microsoft-Windows-Sysmon)
+#                      and _source.z_elastic_ecs.event.provider
+#
+# Full _source key universe seen in process-creation events (for reference):
+#   @timestamp @version CommandLine Company CurrentDirectory Description
+#   FileVersion IntegrityLevel LogonGuid LogonId OriginalFileName
+#   ParentCommandLine ParentUser Product RuleName TerminalSessionId beat_name
+#   beat_version etl_* event_id event_original_message event_original_time
+#   event_recorded_time event_timezone hash_imphash hash_md5 hash_sha1
+#   hash_sha256 host_name level log_name meta_user_name_is_machine opcode
+#   process_guid process_id process_name process_parent_guid process_parent_id
+#   process_parent_name process_parent_path process_path provider_guid
+#   record_number source_name task thread_id type user_account user_domain
+#   user_name version z_elastic_ecs{event,user,ecs,...}
+#   rule_technique_id rule_technique_name rule_technique  <-- MALICIOUS LABELS
+#
+# LABEL MECHANISM (per-event, confirmed by the COMISET paper PMC12266566):
+#   Malicious events carry MITRE ATT&CK tags assigned in real time by the
+#   dataset's labeling rules:
+#     _source.rule_technique_id    (e.g. "T1204","T1047","T1059","T1218.002")
+#     _source.rule_technique_name  (e.g. "User Execution","PowerShell")
+#     _source.RuleName             (Sysmon RuleName, often "-")
+#   Events WITHOUT rule_technique_id are unlabeled (treated as benign).
+#   ~14% of process-creation events in the sampled slice carry a technique id.
+#   CAVEAT (A3/precision risk): these are rule-pattern attributions, not a
+#   curated ground truth; some benign-looking binaries (e.g. OneDrive) are
+#   tagged T1204. Precision metrics must treat this as noisy ground truth.
+#
+# Sigma logsource for process_creation/sysmon needs Channel + EventID. The
+# event_filter section below points Zircolite at the COMISET channel/eventid
+# paths so its early filter does not drop events.
+# =============================================================================
+
+event_filter:
+  enabled: true
+  channel_fields:
+    - _source.log_name
+    - log_name
+    - Channel
+  eventid_fields:
+    - _source.event_id
+    - event_id
+    - EventID
+  filter_all_sources: false
+
+timestamp_detection:
+  default_field: UtcTime
+  auto_detect: true
+  detection_fields:
+    - "@timestamp"
+    - UtcTime
+    - timestamp
+
+exclusions:
+  - xmlns
+
+useless:
+  - null
+  - ""
+
+# Rename the COMISET _source paths to the field names Sigma process_creation
+# rules expect. Keys are FULL dotted raw paths (with the _source. prefix), as
+# required by Zircolite's flattener (verified above).
+mappings:
+  # --- core process-creation fields ---
+  _source.process_path: Image
+  _source.CommandLine: CommandLine
+  _source.process_parent_path: ParentImage
+  _source.ParentCommandLine: ParentCommandLine
+  _source.OriginalFileName: OriginalFileName
+  _source.CurrentDirectory: CurrentDirectory
+  _source.IntegrityLevel: IntegrityLevel
+  _source.process_guid: ProcessGuid
+  _source.process_id: ProcessId
+  _source.process_parent_guid: ParentProcessGuid
+  _source.process_parent_id: ParentProcessId
+  _source.ParentUser: ParentUser
+  _source.Company: Company
+  _source.Description: Description
+  _source.Product: Product
+  _source.FileVersion: FileVersion
+  _source.RuleName: RuleName
+  _source.TerminalSessionId: TerminalSessionId
+  _source.LogonGuid: LogonGuid
+  _source.LogonId: LogonId
+  # --- host / user ---
+  _source.host_name: Computer
+  _source.user_account: User
+  # --- channel / eventid / provider ---
+  _source.log_name: Channel
+  _source.event_id: EventID
+  _source.source_name: Provider_Name
+  # --- hashes (individual; Sysmon "Hashes=" combined lives in message) ---
+  _source.hash_md5: MD5
+  _source.hash_sha1: SHA1
+  _source.hash_sha256: SHA256
+  _source.hash_imphash: IMPHASH
+  # --- raw sysmon message (carries the canonical Hashes= line, etc.) ---
+  _source.event_original_message: OriginalMessage
+  # --- Sigmaforge identity + label (see note below) ---
+  # These are IDENTITY mappings: Zircolite's flattener strips non-alnum chars
+  # from UNMAPPED leaf keys, so an unmapped "_source.sigmaforge_eid" would
+  # become "sigmaforgeeid" (underscore lost). Mapping them to themselves keeps
+  # the exact key names "sigmaforge_eid"/"sigmaforge_label" in the output rows
+  # so they survive verbatim into Zircolite detections / the flat DB.
+  _source.sigmaforge_eid: sigmaforge_eid
+  _source.sigmaforge_label: sigmaforge_label
+
+# COMISET malicious-label source fields (rule_technique_id / rule_technique_name
+# / rule_technique) are intentionally left UNMAPPED so they pass through; they
+# flatten to ruletechniqueid / ruletechniquename / ruletechnique via the
+# non-alnum normalizer. Sigmaforge can read either those or the injected
+# sigmaforge_label (derived from rule_technique_id presence).
+
+alias: {}
+split:
+  Hashes:
+    separator: ","
+    equal: "="
+
+transforms_enabled: false
