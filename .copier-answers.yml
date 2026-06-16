@@ -1,0 +1,16 @@
+# This file is managed by Copier — do not edit by hand.
+# It records the answers used to scaffold this project so that
+# `copier update` can pull later improvements from the Shipwright template.
+_commit: v0.7.0
+_src_path: /Users/christianhuhn/PycharmProjects/ai_project1/shipwright
+author_email: duathron@gmail.com
+author_name: Christian Huhn
+cli_command: sigmaforge
+description: Honest Sigma-rule backtest harness
+env_prefix: SIGMAFORGE
+package_name: sigmaforge
+preset: security
+project_name: sigmaforge
+pypi_name: sigmaforge
+python_version: '3.11'
+

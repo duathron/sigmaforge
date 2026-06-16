@@ -1,0 +1,15 @@
+name: Release
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    uses: duathron/shipwright/.github/workflows/python-release.yml@main
+    with:
+      release-environment: pypi
+      prerelease: false
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+
+# Vendored detection engine (cloned, not committed; Zircolite is not on PyPI)
+/Zircolite/
