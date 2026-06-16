@@ -10,6 +10,7 @@ Precision flows ONLY through `emit_precision` (A2/A12) — no ungated raw precis
 
 from sigmaforge.records import MatchRecord
 from sigmaforge.report.render import render_report
+from sigmaforge.runmanifest import run_hash
 from sigmaforge.score.adapter import score_rule
 from sigmaforge.score.coverage import events_evaluated_for_rule, selection_fields
 from sigmaforge.score.scorer import emit_precision
@@ -65,4 +66,6 @@ def run_backtest(
     }
     # only score loaded (stateless, level-filtered) rules; ignore any engine fires outside `titles`
     assert all(s.rule_id in titles for s in scores)
-    return rows, funnel, render_report(rows, funnel, source=source, min_events=min_events)
+    # A11: worker-invariant reproducibility stamp over the aggregated fire set
+    rh = run_hash(attack_fires | benign_fires)
+    return rows, funnel, render_report(rows, funnel, source=source, min_events=min_events, run_hash=rh)

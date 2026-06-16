@@ -1,11 +1,17 @@
 def render_report(
-    rows: list[dict], funnel: dict, source: str = "COMISET", min_events: int = 1000, fp_tuning_threshold: int = 5
+    rows: list[dict],
+    funnel: dict,
+    source: str = "COMISET",
+    min_events: int = 1000,
+    fp_tuning_threshold: int = 5,
+    run_hash: str | None = None,
 ) -> str:
     """A10/A8: the deliverable. A human-readable FP-tuning report.
     Leads with the site-scope + noisy-label caveat; precision labelled precision@SOURCE."""
     lines = [
         f"# Sigmaforge backtest report ({source})",
         "",
+        *([f"_run hash (worker-invariant): `{run_hash}`_", ""] if run_hash else []),
         f"> Precision is **precision@{source}**, measured on ONE university network "
         f"({source}) — not a general/cross-environment false-positive rate. "
         f"Labels are NOISY ground truth (rule-pattern attributions, e.g. OneDrive.exe tagged "
