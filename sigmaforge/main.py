@@ -27,6 +27,7 @@ def backtest(
     mapping: str = "data/mappings/comiset.yaml",
     workers: int = 4,
     min_events: int = 1000,
+    attack_events: int = 0,
 ) -> None:
     """Backtest Sigma rules: recall on the native-EVTX attack corpus, precision@COMISET on
     the benign corpus. Writes the FP-tuning report to OUT. (Live end-to-end run; meaningful
@@ -56,7 +57,7 @@ def backtest(
         attack_fires,
         benign_fires,
         benign_events,
-        n_attack_malicious=len(benign_events),
+        n_attack_events=attack_events,  # attack-corpus event count = recall denominator (provide via --attack-events)
         positive_control_fired=pc_fired,
         min_events=min_events,
     )

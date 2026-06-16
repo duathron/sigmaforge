@@ -26,7 +26,7 @@ def render_report(
     ]
     for r in rows:
         lines.append(
-            f"| {r.get('rule')} | {r.get('recall')} | {r.get('precision@' + source, r.get('precision'))} "
+            f"| {r.get('rule')} | {r.get('recall')} | {r.get(f'precision@{source}', 'unmeasured')} "
             f"| {r.get('tp')} | {r.get('fp')} | {r.get('events_evaluated')} |"
         )
     # FP-tuning section: surface over-broad rules (the analyst-judgment deliverable)
