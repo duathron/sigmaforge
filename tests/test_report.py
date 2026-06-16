@@ -7,7 +7,6 @@ def test_report_has_funnel_site_label_and_tuning():
             "rule": "PowerShell Enc",
             "recall": 1.0,
             "precision@COMISET": 0.2,
-            "precision": 0.2,
             "tp": 5,
             "fp": 20,
             "events_evaluated": 50000,
@@ -23,6 +22,6 @@ def test_report_has_funnel_site_label_and_tuning():
 
 
 def test_report_no_tuning_candidates():
-    rows = [{"rule": "Tight", "recall": 1.0, "precision": 1.0, "tp": 2, "fp": 0, "events_evaluated": 9000}]
+    rows = [{"rule": "Tight", "recall": 1.0, "precision@COMISET": 1.0, "tp": 2, "fp": 0, "events_evaluated": 9000}]
     md = render_report(rows, {"candidate": 1}, min_events=1000)
     assert "none above threshold" in md

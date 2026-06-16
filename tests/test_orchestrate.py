@@ -38,6 +38,7 @@ def test_two_source_label_aware_scoring():
     assert r["precision@COMISET"] == 1 / 3  # 1/(1+2)
     assert "precision" not in r  # A2: no ungated raw precision leaks
     assert "precision@COMISET" in md and "one university network" in md.lower()
+    assert "run hash" in md.lower()  # A11 wiring guarded (mutation to run_hash=None must fail here)
 
 
 def test_duplicate_benign_fires_deduped():
