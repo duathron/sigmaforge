@@ -1,4 +1,6 @@
-from sigmaforge.ingest.zircolite_runner import parse_detections
+import pytest
+
+from sigmaforge.ingest.zircolite_runner import parse_detections, run_shard
 
 
 def test_parse_reads_passthrough_id_and_label():
@@ -50,6 +52,12 @@ def test_truly_identical_events_still_dedupe():
     out = [{"title": "R", "matches": [{"EventRecordID": 7, "Image": "x.exe"}, {"EventRecordID": 7, "Image": "x.exe"}]}]
     recs = parse_detections(out, corpus_label="malicious")
     assert len({r.event_id for r in recs}) == 1
+
+
+def test_json_and_xml_input_mutually_exclusive():
+    # FIX B3: xml_input (attack_data corpus) and json_input (benign corpus) cannot both be set.
+    with pytest.raises(ValueError):
+        run_shard("x", "y", json_input=True, xml_input=True)
 
 
 def test_technique_passthrough_keyed_on_stable_event_id():

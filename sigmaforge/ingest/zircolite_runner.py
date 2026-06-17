@@ -57,6 +57,7 @@ def run_shard(
     ruleset_glob: str,
     mapping_path: str | None = None,
     json_input: bool = True,
+    xml_input: bool = False,
     corpus_label: str | None = None,
     file_technique_map: dict[str, str] | None = None,
     event_technique_out: dict[str, str] | None = None,
@@ -64,11 +65,21 @@ def run_shard(
     """Run Zircolite over a shard and parse detections.
 
     FIX B: pass ``file_technique_map`` + ``event_technique_out`` to also harvest the
-    per-event ground-truth technique (see ``parse_detections``)."""
+    per-event ground-truth technique (see ``parse_detections``).
+
+    FIX B3: ``xml_input=True`` ingests EVTX-converted-to-XML files (one wrapped
+    ``<Events>...</Events>`` document per file, Zircolite ``--xml-input``). Like the
+    native-EVTX path, each event's ``OriginalLogfile`` is set to the .xml basename,
+    so the same ``file_technique_map`` (basename -> (sub-)technique) recall join
+    applies. ``json_input`` and ``xml_input`` are mutually exclusive."""
+    if json_input and xml_input:
+        raise ValueError("json_input and xml_input are mutually exclusive")
     out = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
     cmd = [*ZIRCOLITE, "--events", events_path, "--ruleset", ruleset_glob, "--outfile", out]
     if json_input:
         cmd += ["--json-input"]
+    if xml_input:
+        cmd += ["--xml-input"]
     if mapping_path:
         cmd += ["--config", mapping_path]
     subprocess.run(cmd, check=True, cwd="/Users/christianhuhn/PycharmProjects/ai_project1/sigmaforge")
