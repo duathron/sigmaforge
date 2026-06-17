@@ -5,19 +5,22 @@ def render_report(
     min_events: int = 1000,
     fp_tuning_threshold: int = 5,
     run_hash: str | None = None,
+    corpus_note: str | None = None,
 ) -> str:
     """A10/A8: the deliverable. A human-readable FP-tuning report.
-    Leads with the site-scope + noisy-label caveat; precision labelled precision@SOURCE."""
+    Leads with the corpus-scope + noisy-label caveat; precision labelled precision@SOURCE.
+    `corpus_note` MUST disclose the benign corpus composition when it is blended (A8 honesty)."""
     lines = [
         f"# Sigmaforge backtest report ({source})",
         "",
         *([f"_run hash (worker-invariant): `{run_hash}`_", ""] if run_hash else []),
-        f"> Precision is **precision@{source}**, measured on ONE university network "
-        f"({source}) — not a general/cross-environment false-positive rate. "
+        f"> Precision is **precision@{source}**, measured on the benign corpus described below "
+        f"— not a general/cross-environment false-positive rate. "
         f"Labels are NOISY ground truth (rule-pattern attributions, e.g. OneDrive.exe tagged "
         f"as an ATT&CK technique), so a measured FP may be a mislabel. Recall is measured on "
         f"the labeled native-EVTX attack corpora over PROCESS-CREATION events only (the loaded "
         f"ruleset is 100% process_creation). Precision floor: {min_events} evaluated events.",
+        *([f"> **Benign corpus composition:** {corpus_note}"] if corpus_note else []),
         "",
         "> **Precision tautology caveat (BLOCKER-2):** a rule showing precision = 1.0 with fp = 0 "
         "is only trustworthy if benign-labelled events actually matched its selection. Rules whose "
@@ -66,12 +69,7 @@ def render_report(
         lines.append("- none above threshold")
 
     # BLOCKER-2: rules whose measured precision is tautological (no benign exemplars).
-    tautology = [
-        r
-        for r in rows
-        if r.get("no_benign_exemplars")
-        and isinstance(r.get(f"precision@{source}"), float)
-    ]
+    tautology = [r for r in rows if r.get("no_benign_exemplars") and isinstance(r.get(f"precision@{source}"), float)]
     lines += ["", "## Precision tautologies (no benign exemplars — precision carries no FP signal)"]
     if tautology:
         for r in sorted(tautology, key=lambda x: str(x.get("rule"))):

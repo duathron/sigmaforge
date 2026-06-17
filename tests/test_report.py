@@ -13,9 +13,16 @@ def test_report_has_funnel_site_label_and_tuning():
         }
     ]
     funnel = {"candidate": 100, "loaded": 95, "stateless": 90, "fires": 40, "survives_fp": 12}
-    md = render_report(rows, funnel, source="COMISET", min_events=1000)
+    md = render_report(
+        rows,
+        funnel,
+        source="COMISET",
+        min_events=1000,
+        corpus_note="2032 COMISET + 15092 Nextron goodware",
+    )
     assert "precision@COMISET" in md
-    assert "one university network" in md.lower()
+    assert "benign corpus described below" in md.lower()
+    assert "benign corpus composition" in md.lower()  # A8 blend disclosure when corpus_note given
     assert "noisy" in md.lower()
     assert "candidate: 100" in md
     assert "fires 20x on benign" in md  # the FP-tuning line surfaces the over-broad rule

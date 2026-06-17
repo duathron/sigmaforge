@@ -1,8 +1,10 @@
-# Sigmaforge backtest report (COMISET)
+# Sigmaforge backtest report (combined-benign: COMISET + Nextron)
 
 _run hash (worker-invariant): `945be0a41fd9f77548d786b98a434d64823dabaa00d981718f50d0d725b61859`_
 
-> Precision is **precision@COMISET**, measured on ONE university network (COMISET) — not a general/cross-environment false-positive rate. Labels are NOISY ground truth (rule-pattern attributions, e.g. OneDrive.exe tagged as an ATT&CK technique), so a measured FP may be a mislabel. Recall is measured on the labeled native-EVTX attack corpora over PROCESS-CREATION events only (the loaded ruleset is 100% process_creation). Precision floor: 1000 evaluated events.
+> Precision is **precision@combined-benign**, measured on the benign corpus described below — not a general/cross-environment false-positive rate. Labels are NOISY ground truth (rule-pattern attributions, e.g. OneDrive.exe tagged as an ATT&CK technique), so a measured FP may be a mislabel. Recall is measured on the labeled native-EVTX attack corpora over PROCESS-CREATION events only (the loaded ruleset is 100% process_creation). Precision floor: 1000 evaluated events.
+
+> **Benign corpus composition (A8 honesty):** 17124 Sysmon EID-1 events = ~2032 from COMISET REAL (a real university network, incl. 162 malicious-labelled) + ~15092 NextronSystems/evtx-baseline goodware (Apache-2.0, benign-by-construction). ~88% is synthetic goodware, NOT university traffic — hence `precision@combined-benign`, not a pure `precision@combined-benign`. Per-event provenance was not retained this run, so a rule's FPs cannot be split COMISET-vs-Nextron; adding a `sigmaforge_origin` tag is the next-run fix.
 
 > **Precision tautology caveat (BLOCKER-2):** a rule showing precision = 1.0 with fp = 0 is only trustworthy if benign-labelled events actually matched its selection. Rules whose benign-corpus coverage held **zero benign exemplars** are flagged `no-benign-exemplars` below: their fp = 0 is true *by construction*, so precision = 1.0 carries **no false-positive signal** — it is not evidence of FP-resistance.
 
@@ -15,7 +17,7 @@ _run hash (worker-invariant): `945be0a41fd9f77548d786b98a434d64823dabaa00d981718
 
 ## Per-rule
 
-| rule | recall | precision@COMISET | tp | fp | events_evaluated | benign_events_evaluated | precision_signal |
+| rule | recall | precision@combined-benign | tp | fp | events_evaluated | benign_events_evaluated | precision_signal |
 |---|---|---|---|---|---|---|---|
 | Powershell Token Obfuscation - Process Creation | 0.0 | unmeasured | 0 | 0 | 17124 | 16962 | n/a (unmeasured) |
 | Potential Windows Defender Tampering Via Wmic.EXE | 0.0 | unmeasured | 0 | 0 | 17124 | 16962 | n/a (unmeasured) |

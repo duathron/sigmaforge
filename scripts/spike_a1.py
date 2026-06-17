@@ -63,12 +63,19 @@ def run_zircolite(ruleset: Path, events: Path, outfile: Path) -> list[dict]:
     if outfile.exists():
         outfile.unlink()
     cmd = [
-        "uv", "run", "python", str(ZIRCOLITE),
-        "--events", str(events),
+        "uv",
+        "run",
+        "python",
+        str(ZIRCOLITE),
+        "--events",
+        str(events),
         "--json-input",
-        "--ruleset", str(ruleset),
-        "--config", str(CONFIG),
-        "--outfile", str(outfile),
+        "--ruleset",
+        str(ruleset),
+        "--config",
+        str(CONFIG),
+        "--outfile",
+        str(outfile),
     ]
     proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -118,8 +125,7 @@ def build_planted_slice(dst: Path) -> str:
     s["process_path"] = "c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe"
     s["process_name"] = "powershell.exe"
     s["CommandLine"] = (
-        "powershell.exe -nop -w hidden -enc "
-        "JABjAD0ATgBlAHcALQBPAGIAagBlAGMAdAAgAE4AZQB0AC4AVwBlAGIAQwBsAGkAZQBuAHQA"
+        "powershell.exe -nop -w hidden -enc JABjAD0ATgBlAHcALQBPAGIAagBlAGMAdAAgAE4AZQB0AC4AVwBlAGIAQwBsAGkAZQBuAHQA"
     )
     s["OriginalFileName"] = "PowerShell.EXE"
     s["sigmaforge_label"] = "malicious"
@@ -183,16 +189,22 @@ def main() -> int:
 
     print("RESULTS")
     print("-" * 72)
-    print(f"(a) logsource-only events admitted         : {a_admitted}"
-          f"   [want > 0]          {'OK' if crit_a else 'FAIL'}")
-    print(f"(b) narrow rule hits on PLANTED slice      : {b_narrow_planted}"
-          f"   [want >= 1]         {'OK' if crit_b else 'FAIL'}")
+    print(
+        f"(a) logsource-only events admitted         : {a_admitted}   [want > 0]          {'OK' if crit_a else 'FAIL'}"
+    )
+    print(
+        f"(b) narrow rule hits on PLANTED slice      : {b_narrow_planted}"
+        f"   [want >= 1]         {'OK' if crit_b else 'FAIL'}"
+    )
     print(f"    planted eid is the firing row          : {b_is_plant}")
-    print(f"(c) narrow rule hits on RAW (benign) slice : {c_narrow_raw}"
-          f"   [want == 0]         {'OK' if crit_c else 'FAIL'}")
+    print(
+        f"(c) narrow rule hits on RAW (benign) slice : {c_narrow_raw}"
+        f"   [want == 0]         {'OK' if crit_c else 'FAIL'}"
+    )
     print(f"(d) broad rule hits ('{BROAD_TITLE}'): {d_broad}")
-    print(f"    total hits across whole ruleset        : {d_total_fp}"
-          f"   [want > 0]          {'OK' if crit_d else 'FAIL'}")
+    print(
+        f"    total hits across whole ruleset        : {d_total_fp}   [want > 0]          {'OK' if crit_d else 'FAIL'}"
+    )
     print(f"    distinct SigmaHQ rules that fired       : {d_rules_fired}")
     print("-" * 72)
 
@@ -202,8 +214,7 @@ def main() -> int:
         return 0
 
     print("A1 FAIL")
-    failed = [n for n, ok in
-              (("a", crit_a), ("b", crit_b), ("c", crit_c), ("d", crit_d)) if not ok]
+    failed = [n for n, ok in (("a", crit_a), ("b", crit_b), ("c", crit_c), ("d", crit_d)) if not ok]
     print(f"failed criteria: {', '.join(failed)}")
     return 1
 
