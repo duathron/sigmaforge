@@ -29,3 +29,7 @@ build/
 # FIX H: compiled-from-loaded ruleset is a generated artifact (regenerate with
 # scripts/compile_loaded_ruleset.py); the generator script IS committed.
 /data/rulesets/
+
+# session needle artifacts (large/binary, not deliverables)
+reports/needle/
+*.db
