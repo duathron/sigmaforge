@@ -670,3 +670,5 @@ _run hash (worker-invariant): `15de32eefa232f025746b5be131c1e7d84e4b1673ca5dca47
 | rule | technique(s) | recall | numer/denom |
 |---|---|---|---|
 | _(none fired on its own technique's events)_ | | | |
+
+> **Why this table is empty (honest, not a bug):** of the 17 attack-corpus fires, 10 do join a ground-truth technique — but this corpus labels events at **bare-parent** granularity (e.g. `T1003`, `T1059`) while most of the rules that fired carry **sub-technique** tags (e.g. `T1003.001`, `T1059.001`). By the asymmetric rule, a sub-technique-tagged rule is NOT credited for a bare-parent event (the corpus folder simply didn't record which sub-technique it was), so those fires score as non-matching. This is the conservative direction — it can only push recall toward `unmeasured`/0, never inflate it. The honest conclusion: **on this corpus + ruleset, under correct strict scoping, no rule has a measurable non-zero recall.** Making more rules measurable needs a corpus labelled at sub-technique granularity (or accepting bare-parent credit, which would re-introduce dilution).
