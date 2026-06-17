@@ -160,7 +160,7 @@ the `net.exe` leg, and `net.exe` running the TeamViewer stop is the parent of th
 | metric | original rule | patched rule |
 |---|---|---|
 | **benign-corpus FP** | **66** | **0** |
-| **attack-EVTX TP** | **0** | **0** |
+| **attack-corpus TP** (attack.db, 0 in-list service-tamper samples) | **0** | **0** |
 
 - benign FP **66 → 0** (commands + outputs in `reports/needle/`).
 - attack TP **0 → 0** — the filter is parent-anchored on a binary
@@ -203,7 +203,12 @@ not of the patch.
    attack set), but a corpus with an in-list service-tamper sample would be
    needed to demonstrate non-zero TP retention.
 4. **Filter scope.** The fix is deliberately narrow (Ninite + the net1 relaunch
-   of a TeamViewer stop). It does not address the more general weakness that
+   of a TeamViewer stop). Note one asymmetry in the two filter legs: the net.exe
+   leg is command-anchored (parent command must contain `net stop "TeamViewer`),
+   but the `ParentImage|endswith: '\Ninite.exe'` leg is **unconditional** — it
+   excludes any net-tool child of `Ninite.exe` regardless of command line.
+   Defensible (Ninite is a specific signed installer), but slightly broader than
+   the 66 events themselves. It does not address the more general weakness that
    `selection_services` lists broad remote-admin/DB products (`TeamViewer`,
    `MySQL`, `Tomcat`, …) whose legitimate stop/restart by other installers or
    admins would also fire the rule. A broader fix (drop non-security products
