@@ -119,7 +119,5 @@ def per_technique_recall(
     if denom == 0:
         return UNMEASURED, 0, 0, []
 
-    numer = sum(
-        1 for eid in fired_event_ids if _event_matches_rule(event_technique.get(eid), techniques)
-    )
+    numer = sum(1 for eid in fired_event_ids if _event_matches_rule(event_technique.get(eid), techniques))
     return numer / denom, numer, denom, measured

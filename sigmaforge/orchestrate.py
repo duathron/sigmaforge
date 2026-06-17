@@ -138,9 +138,10 @@ def run_backtest(
         )
     else:
         recall_note = (
-            "recall is **pooled** (tp / whole-corpus). Per-technique recall (FIX B) is not enabled "
-            "for this run."
+            "recall is **pooled** (tp / whole-corpus). Per-technique recall (FIX B) is not enabled for this run."
         )
-    return rows, funnel, render_report(
-        rows, funnel, source=source, min_events=min_events, run_hash=rh, recall_note=recall_note
+    return (
+        rows,
+        funnel,
+        render_report(rows, funnel, source=source, min_events=min_events, run_hash=rh, recall_note=recall_note),
     )

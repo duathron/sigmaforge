@@ -55,7 +55,9 @@ def test_subtechnique_rule_with_no_matching_corpus_bucket_unmeasured():
     """T1027.005 rule against a corpus that only has BARE T1027 -> no exact match,
     and a sub-technique rule does NOT match the bare parent's pool -> unmeasured."""
     recall, numer, denom, measured = per_technique_recall(
-        "R", {"T1027.005"}, set(),
+        "R",
+        {"T1027.005"},
+        set(),
         event_technique={},
         technique_event_counts={"T1027": 742},
     )
@@ -64,7 +66,9 @@ def test_subtechnique_rule_with_no_matching_corpus_bucket_unmeasured():
 
 def test_recall_scoped_to_technique_denominator():
     recall, numer, denom, measured = per_technique_recall(
-        "R", {"T1059"}, {"a", "b", "c"},
+        "R",
+        {"T1059"},
+        {"a", "b", "c"},
         event_technique={"a": "T1059", "b": "T1059", "c": "T1059"},
         technique_event_counts={"T1059": 50, "T1003": 9999},
     )
@@ -75,7 +79,9 @@ def test_recall_scoped_to_technique_denominator():
 
 def test_recall_only_counts_on_technique_fires():
     recall, numer, denom, _ = per_technique_recall(
-        "R", {"T1059"}, {"a", "b"},
+        "R",
+        {"T1059"},
+        {"a", "b"},
         event_technique={"a": "T1059", "b": "T1003"},  # b is off-technique
         technique_event_counts={"T1059": 10},
     )
@@ -84,7 +90,9 @@ def test_recall_only_counts_on_technique_fires():
 
 def test_multi_technique_rule_sums_denominators():
     recall, numer, denom, measured = per_technique_recall(
-        "R", {"T1059", "T1003"}, {"a", "b"},
+        "R",
+        {"T1059", "T1003"},
+        {"a", "b"},
         event_technique={"a": "T1059", "b": "T1003"},
         technique_event_counts={"T1059": 10, "T1003": 20},
     )
@@ -93,15 +101,17 @@ def test_multi_technique_rule_sums_denominators():
 
 
 def test_untagged_rule_unmeasured():
-    recall, numer, denom, measured = per_technique_recall(
-        "R", set(), {"a"}, {"a": "T1059"}, {"T1059": 10}
-    )
+    recall, numer, denom, measured = per_technique_recall("R", set(), {"a"}, {"a": "T1059"}, {"T1059": 10})
     assert recall == UNMEASURED and numer == 0 and denom == 0 and measured == []
 
 
 def test_technique_with_zero_events_unmeasured():
     recall, numer, denom, measured = per_technique_recall(
-        "R", {"T1490"}, set(), {"a": "T1059"}, {"T1059": 10}  # no T1490 events
+        "R",
+        {"T1490"},
+        set(),
+        {"a": "T1059"},
+        {"T1059": 10},  # no T1490 events
     )
     assert recall == UNMEASURED and denom == 0
 
@@ -109,7 +119,9 @@ def test_technique_with_zero_events_unmeasured():
 def test_partially_present_technique_set_measures_only_present():
     # rule tagged T1059 (present) + T1490 (absent) -> measured against T1059 only
     recall, numer, denom, measured = per_technique_recall(
-        "R", {"T1059", "T1490"}, {"a"},
+        "R",
+        {"T1059", "T1490"},
+        {"a"},
         event_technique={"a": "T1059"},
         technique_event_counts={"T1059": 10},
     )

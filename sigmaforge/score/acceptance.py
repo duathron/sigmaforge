@@ -44,9 +44,7 @@ class GateResult:
                 + ("…" if len(self.dropped_titles) > 5 else "")
             )
         if self.engine_fires != self.scored_fires:
-            parts.append(
-                f"engine fires ({self.engine_fires}) != scored fires ({self.scored_fires})"
-            )
+            parts.append(f"engine fires ({self.engine_fires}) != scored fires ({self.scored_fires})")
         return f"{self.corpus}: " + "; ".join(parts)
 
 
