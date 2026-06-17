@@ -13,7 +13,11 @@ def _stable_event_id(row: dict) -> str:
     alone collapses record 42 of fileA with record 42 of fileB across a multi-file attack run and
     silently deflates recall. Hash the whole flattened row instead: it carries Computer/UtcTime/
     Image/CommandLine/... which differ across files even when EventRecordID repeats. Two genuinely
-    identical events still hash-collapse — that is correct dedup, not a collision bug."""
+    identical events still hash-collapse — that is correct dedup, not a collision bug.
+    (On real data each row also carries Zircolite's autoincrement `row_id`, globally unique
+    across a single multi-file run, so real events never over-split. NB: if `--parallel`
+    ingestion is ever enabled, `row_id` resets per chunk — uniqueness then rests on the
+    content fields, UtcTime/ProcessGuid/etc., which the whole-row hash already includes.)"""
     canonical = json.dumps(row, sort_keys=True, default=str)
     return hashlib.sha1(canonical.encode()).hexdigest()
 
