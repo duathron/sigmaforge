@@ -1,0 +1,37 @@
+{
+  "attack_corpus": "splunk/attack_data (sub-technique-foldered, Apache-2.0) \u2014 UNCHANGED from run5 (FIX B3)",
+  "attack_fires": 1163,
+  "attack_process_creation_events": 24644,
+  "benign_corpus": "run6: combined (COMISET real slice + NextronSystems/evtx-baseline) + DARPA OpTC benign-week eCAR (FiveDirections/OpTC-data, Distribution A)",
+  "benign_corpus_path": "data/comiset/combined_optc_benign_sample.jsonl",
+  "benign_corpus_sha": "edab6123d38792302a15d66e4a3820ec2df560c4a0cc2c36270200c0468a5da6",
+  "benign_eid1_baseline_run5": 17124,
+  "benign_eid1_optc_added": 30383,
+  "benign_eid1_total": 47507,
+  "benign_fires": 19084,
+  "benign_label_split": {
+    "benign": 47345,
+    "malicious": 162
+  },
+  "level": [
+    "high",
+    "critical"
+  ],
+  "loaded_rule_count": 609,
+  "mapping_hash": "f09229ed6d5056d9a6bf176ea1a9efef46bac3b043a4dc1c775dc7433c2912fe",
+  "mapping_path": "data/mappings/comiset.yaml",
+  "positive_control_fired": true,
+  "precision_floor": 1000,
+  "recall_method": "per-sub-technique (FIX B3, unchanged)",
+  "recall_technique_map": "data/comiset/attack_data_technique_map.json",
+  "recall_technique_map_sha": "a51fe727997406b8e00a6bf96b304bbf027303e556c8b54d43b04e378e2387ce",
+  "recommended_precision_floor": 4750,
+  "rules_precision_measurable": 7,
+  "rules_recall_measurable": 338,
+  "rules_recall_unmeasured": 271,
+  "rules_with_technique_tag": 555,
+  "ruleset_path": "data/rulesets/sigmaforge_loaded.json",
+  "ruleset_sha": "69a06fb8d3b66066bc8be98feea27028f6d6d23a535c102e4f3d68f84741a429",
+  "run_hash": "af360d369ccec387bbdf2ffde2cea1fc1c8c79e0c2f851ef0b5607c574026b1b",
+  "zircolite_version": "3.7.6"
+}
