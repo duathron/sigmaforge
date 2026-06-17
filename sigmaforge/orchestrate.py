@@ -12,7 +12,11 @@ from sigmaforge.records import MatchRecord
 from sigmaforge.report.render import render_report
 from sigmaforge.runmanifest import run_hash
 from sigmaforge.score.adapter import score_rule
-from sigmaforge.score.coverage import events_evaluated_for_rule, selection_fields
+from sigmaforge.score.coverage import (
+    benign_events_evaluated_for_rule,
+    events_evaluated_for_rule,
+    selection_fields,
+)
 from sigmaforge.score.scorer import emit_precision
 
 
@@ -33,9 +37,13 @@ def run_backtest(
 
     scores = []
     recall_by_rule: dict[str, float] = {}
+    benign_cov_by_rule: dict[str, int] = {}
     for rule in loaded_rules:
         rid = rule["title"]
-        cov = events_evaluated_for_rule(benign_events, selection_fields(rule))
+        fields = selection_fields(rule)
+        cov = events_evaluated_for_rule(benign_events, fields)
+        # BLOCKER-2: how many BENIGN-labelled events could have produced an FP at all
+        benign_cov_by_rule[rid] = benign_events_evaluated_for_rule(benign_events, fields)
         # precision side: label-aware + dedupe via score_rule on the benign corpus
         b = [f for f in benign_fires if f.rule_id == rid]
         s = score_rule(rid, b, n_malicious=n_ben_mal, n_benign=n_ben_ben, events_evaluated=cov)
@@ -47,6 +55,9 @@ def run_backtest(
     precisions = emit_precision(scores, positive_control_fired, min_events)  # the ONLY precision path
     rows = []
     for s in scores:
+        # BLOCKER-2 flag: a measured precision with zero benign exemplars carries NO FP signal
+        # (fp=0 is true by construction — no benign-labelled event matched the selection).
+        no_benign_exemplars = benign_cov_by_rule[s.rule_id] == 0
         rows.append(
             {
                 "rule": s.rule_id,
@@ -55,6 +66,8 @@ def run_backtest(
                 "tp": s.tp,
                 "fp": s.fp,
                 "events_evaluated": s.events_evaluated,
+                "benign_events_evaluated": benign_cov_by_rule[s.rule_id],
+                "no_benign_exemplars": no_benign_exemplars,
             }
         )
     funnel = {

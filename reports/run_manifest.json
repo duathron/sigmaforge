@@ -1,0 +1,41 @@
+{
+  "attack_corpus": "EVTX-ATTACK-SAMPLES (native EVTX, all-malicious)",
+  "attack_fires": 1084,
+  "attack_pc_breakdown": {
+    "open_errors": [
+      [
+        "Credential Access/CA_PetiPotam_etw_rpc_efsr_5_6.evtx",
+        "argument of type 'NoneType' is not iterable"
+      ]
+    ],
+    "pc": 1533,
+    "record_errors": 0,
+    "sec4688": 42,
+    "sysmon1": 1491,
+    "total": 9907
+  },
+  "attack_process_creation_events": 1533,
+  "benign_corpus": "combined: COMISET real slice + NextronSystems/evtx-baseline v0.8.4 all-evtx",
+  "benign_corpus_path": "data/comiset/combined_benign_sample.jsonl",
+  "benign_corpus_sha": "3320e77fa3be078db584c46e44788aa0532ac45a80fbf5f41777e02708b0768b",
+  "benign_eid1_total": 17124,
+  "benign_fires": 767,
+  "benign_label_split": {
+    "benign": 16962,
+    "malicious": 162
+  },
+  "level": [
+    "high",
+    "critical"
+  ],
+  "loaded_rule_count": 609,
+  "mapping_hash": "f09229ed6d5056d9a6bf176ea1a9efef46bac3b043a4dc1c775dc7433c2912fe",
+  "mapping_path": "data/mappings/comiset.yaml",
+  "positive_control_fired": true,
+  "precision_floor": 1000,
+  "recommended_precision_floor": 1712,
+  "ruleset_path": "Zircolite/rules/rules_windows_sysmon.json",
+  "ruleset_sha": "dfd6b0af3ea67458de4a583e26d5e593411a0594715f97f2293fd74d77eb5575",
+  "run_hash": "945be0a41fd9f77548d786b98a434d64823dabaa00d981718f50d0d725b61859",
+  "zircolite_version": "3.7.6"
+}
