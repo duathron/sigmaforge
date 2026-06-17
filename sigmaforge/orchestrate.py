@@ -38,7 +38,7 @@ def run_backtest(
     source: str = "COMISET",
     # FIX B (per-technique recall). All three must be supplied together to enable it;
     # if any is None, recall falls back to the legacy pooled denominator.
-    event_technique: dict[str, str] | None = None,  # event_id -> parent ATT&CK technique
+    event_technique: dict[str, str] | None = None,  # event_id -> ATT&CK (sub-)technique
     technique_event_counts: dict[str, int] | None = None,  # technique -> total attack PC events
 ) -> tuple[list[dict], dict, str]:
     per_technique = event_technique is not None and technique_event_counts is not None
@@ -128,10 +128,12 @@ def run_backtest(
     if per_technique:
         measurable = sum(1 for r in rows if r["recall_measurable"])
         recall_note = (
-            "recall is **per-technique** — each rule is measured against only the attack events "
-            "of its own ATT&CK technique(s) (denom = events of that technique, sub-technique folded "
-            "to parent), NOT pooled over the whole corpus. Rules with no technique tag, or whose "
-            "technique has zero attack events in this corpus, are `unmeasured` (not 0). "
+            "recall is **per-technique, sub-technique-granular** — each rule is measured against "
+            "only the attack events of its own ATT&CK (sub-)technique(s), NOT pooled over the whole "
+            "corpus and NOT diluted by sibling sub-techniques. A rule tagged `T1059.001` is scored "
+            "against `T1059.001` events ONLY (its `T1059.003` siblings are excluded); a rule with a "
+            "bare parent tag `T1059` covers all `T1059.*` children. Rules with no technique tag, or "
+            "whose tags match zero attack events in this corpus, are `unmeasured` (not 0). "
             f"Recall-measurable rules: {measurable}/{len(rows)}."
         )
     else:

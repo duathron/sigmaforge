@@ -3,14 +3,63 @@
 from sigmaforge.score.recall import UNMEASURED, per_technique_recall, rule_techniques
 
 
-def test_rule_techniques_folds_subtechnique_to_parent():
+def test_rule_techniques_keeps_subtechnique_granularity():
+    # FIX B2: do NOT fold to parent — keep the declared tag granularity.
     rule = {"tags": ["attack.persistence", "attack.t1543.003", "attack.t1059.001"]}
-    assert rule_techniques(rule) == {"T1543", "T1059"}
+    assert rule_techniques(rule) == {"T1543.003", "T1059.001"}
+
+
+def test_rule_techniques_keeps_bare_parent_tag():
+    # A bare parent tag stays bare (it legitimately covers the whole technique).
+    assert rule_techniques({"tags": ["attack.t1059"]}) == {"T1059"}
 
 
 def test_rule_techniques_empty_when_no_attack_tag():
     assert rule_techniques({"tags": ["car.2013-07-001", "cve.2021-1234"]}) == set()
     assert rule_techniques({}) == set()
+
+
+def test_subtechnique_rule_excludes_sibling_no_dilution():
+    """THE BUG (FIX B2): a T1059.001 rule scored against BOTH T1059.001 and T1059.003
+    events must count ONLY the T1059.001 events — the sibling T1059.003 events are
+    excluded from BOTH denom and numer (no dilution)."""
+    recall, numer, denom, measured = per_technique_recall(
+        "R",
+        {"T1059.001"},
+        {"ps1", "ps2", "cmd1"},  # rule fired on two PS events + one cmd-shell sibling
+        event_technique={"ps1": "T1059.001", "ps2": "T1059.001", "cmd1": "T1059.003"},
+        technique_event_counts={"T1059.001": 58, "T1059.003": 140},
+    )
+    # denom is 58 (T1059.001 only), NOT 58+140=198. The T1059.003 fire does not count.
+    assert denom == 58
+    assert numer == 2
+    assert recall == 2 / 58
+    assert measured == ["T1059.001"]
+
+
+def test_bare_parent_rule_covers_all_children():
+    """A bare-T1059 rule covers ALL T1059.* children (and bare T1059)."""
+    recall, numer, denom, measured = per_technique_recall(
+        "R",
+        {"T1059"},
+        {"ps1", "cmd1"},
+        event_technique={"ps1": "T1059.001", "cmd1": "T1059.003"},
+        technique_event_counts={"T1059.001": 58, "T1059.003": 140, "T1003": 28},
+    )
+    assert denom == 58 + 140  # all children, T1003 excluded
+    assert numer == 2
+    assert measured == ["T1059.001", "T1059.003"]
+
+
+def test_subtechnique_rule_with_no_matching_corpus_bucket_unmeasured():
+    """T1027.005 rule against a corpus that only has BARE T1027 -> no exact match,
+    and a sub-technique rule does NOT match the bare parent's pool -> unmeasured."""
+    recall, numer, denom, measured = per_technique_recall(
+        "R", {"T1027.005"}, set(),
+        event_technique={},
+        technique_event_counts={"T1027": 742},
+    )
+    assert recall == UNMEASURED and denom == 0 and measured == []
 
 
 def test_recall_scoped_to_technique_denominator():

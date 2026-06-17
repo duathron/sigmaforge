@@ -8,13 +8,20 @@ source EVTX file's PARENT FOLDER carries an unambiguous ATT&CK technique. sbouss
 the corpus switch (documented in reports/run4.md).
 
 Outputs (committed for reproducibility, like data/comiset/attack_pc_count.json):
-- ``technique_event_counts``: parent technique -> total process-creation events (Sysmon
+- ``technique_event_counts``: technique ID -> total process-creation events (Sysmon
   EID 1 + Security 4688) of that technique. This is the per-technique recall denominator.
-- ``file_technique``: source EVTX basename -> parent technique. The orchestrator joins
+- ``file_technique``: source EVTX basename -> technique ID. The orchestrator joins
   fired events (whose OriginalLogfile == this basename) to a technique.
 
-Sub-techniques are folded to parent (T1543.003 -> T1543); the ``.xxx`` placeholder
-folders (e.g. T1098.xxx) fold to T1098.
+FIX B2: technique IDs are captured at SUB-TECHNIQUE GRANULARITY (e.g. T1059.001 stays
+T1059.001, NOT folded to T1059). This is required for correct asymmetric recall scoping:
+a rule tagged ``attack.t1059.001`` (PowerShell) must be measured against T1059.001 events
+ONLY, never its T1059.003 (Windows Command Shell) siblings. Folding to parent diluted the
+denominator with sibling events the rule cannot match.
+
+The ``.xxx`` placeholder folders (e.g. T1098.xxx, T1110.xxx) carry a genuinely UNKNOWN
+sub-technique, so they fold to the BARE parent (T1098, T1110) — a bare-parent label that a
+generic bare-parent rule legitimately covers (and a sub-technique rule does NOT match).
 
 Usage: uv run python scripts/build_technique_map.py <CORPUS_DIR> [out.json]
 """
@@ -27,15 +34,22 @@ from pathlib import Path
 
 from evtx import PyEvtxParser
 
-_TECH_DIR = re.compile(r"^(T\d{4})")
+# Capture sub-technique granularity (T1059.001), but a ``.xxx`` placeholder (genuinely
+# unknown sub-technique) is NOT a real sub-technique — it folds to the bare parent.
+_TECH_DIR = re.compile(r"^(T\d{4})(?:\.(\d{3}))?")
 
 
 def _technique_of(path: Path, root: Path) -> str | None:
-    """Parent ATT&CK technique from the file's folder path (Txxxx... folder segment)."""
+    """ATT&CK technique from the file's folder path (Txxxx[.nnn]... folder segment).
+
+    FIX B2: keeps sub-technique granularity (e.g. ``T1059.001``). A ``Txxxx.xxx``
+    placeholder folder carries an unknown sub-technique and folds to the bare parent
+    (``Txxxx``)."""
     for seg in path.relative_to(root).parts:
         m = _TECH_DIR.match(seg)
         if m:
-            return m.group(1)
+            parent, sub = m.group(1), m.group(2)
+            return f"{parent}.{sub}" if sub else parent
     return None
 
 

@@ -120,7 +120,7 @@ def test_precision_blocked_when_control_fails():
 
 TAGGED_RULE = {
     "title": "PowerShell Enc",
-    "tags": ["attack.execution", "attack.t1059.001"],  # -> parent T1059
+    "tags": ["attack.execution", "attack.t1059.001"],  # FIX B2: kept granular -> T1059.001
     "detection": {"selection": {"Image|endswith": "\\powershell.exe"}, "condition": "selection"},
 }
 UNTAGGED_RULE = {
@@ -135,40 +135,41 @@ OTHER_TECH_RULE = {
 
 
 def test_per_technique_recall_scopes_denominator_to_the_rules_technique():
-    # 100 T1059 attack events exist; the rule fired on 3 of them -> recall 3/100,
-    # NOT 3/(whole corpus). Off-technique events do not enlarge the denominator.
+    # 100 T1059.001 attack events exist; the rule (tagged T1059.001) fired on 3 of them
+    # -> recall 3/100, NOT 3/(whole corpus). Sibling T1059.003 + off-technique T1003 do
+    # NOT enlarge the denominator (FIX B2: no sibling dilution).
     attack = {MatchRecord("PowerShell Enc", f"e{i}", "malicious") for i in range(3)}
-    event_technique = {f"e{i}": "T1059" for i in range(3)}
-    technique_event_counts = {"T1059": 100, "T1003": 9999}  # pooled corpus is huge
+    event_technique = {f"e{i}": "T1059.001" for i in range(3)}
+    technique_event_counts = {"T1059.001": 100, "T1059.003": 140, "T1003": 9999}
     rows, _, md = run_backtest(
         [TAGGED_RULE],
         attack,
         set(),
         _benign_events(),
-        n_attack_events=10103,  # legacy pooled denom — must be IGNORED in per-technique mode
+        n_attack_events=10239,  # legacy pooled denom — must be IGNORED in per-technique mode
         positive_control_fired=True,
         min_events=1000,
         event_technique=event_technique,
         technique_event_counts=technique_event_counts,
     )
     r = rows[0]
-    assert r["recall"] == 3 / 100  # scoped to T1059, not pooled (would have been 3/10103)
-    assert r["recall_denom"] == 100
+    assert r["recall"] == 3 / 100  # scoped to T1059.001 (siblings/off-tech excluded)
+    assert r["recall_denom"] == 100  # NOT 100+140 — T1059.003 siblings excluded
     assert r["recall_numer"] == 3
     assert r["recall_measurable"] is True
-    assert r["recall_measured_techniques"] == ["T1059"]
+    assert r["recall_measured_techniques"] == ["T1059.001"]
     assert "per-technique" in md.lower()
 
 
 def test_per_technique_recall_ignores_fires_on_off_technique_events():
-    # rule's technique is T1059; it fired on one T1059 event and one T1003 event.
+    # rule's technique is T1059.001; it fired on one T1059.001 event and one T1003 event.
     # only the on-technique fire counts toward this rule's recall.
     attack = {
         MatchRecord("PowerShell Enc", "good", "malicious"),
         MatchRecord("PowerShell Enc", "wrong", "malicious"),
     }
-    event_technique = {"good": "T1059", "wrong": "T1003"}
-    technique_event_counts = {"T1059": 10, "T1003": 10}
+    event_technique = {"good": "T1059.001", "wrong": "T1003"}
+    technique_event_counts = {"T1059.001": 10, "T1003": 10}
     rows, _, _ = run_backtest(
         [TAGGED_RULE],
         attack,
