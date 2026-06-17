@@ -25,3 +25,7 @@ build/
 /flattened_events_*.json
 /zircolite.log
 /detected_events.json
+
+# FIX H: compiled-from-loaded ruleset is a generated artifact (regenerate with
+# scripts/compile_loaded_ruleset.py); the generator script IS committed.
+/data/rulesets/

@@ -11,6 +11,7 @@ Precision flows ONLY through `emit_precision` (A2/A12) — no ungated raw precis
 from sigmaforge.records import MatchRecord
 from sigmaforge.report.render import render_report
 from sigmaforge.runmanifest import run_hash
+from sigmaforge.score.acceptance import assert_one_source
 from sigmaforge.score.adapter import score_rule
 from sigmaforge.score.coverage import (
     benign_events_evaluated_for_rule,
@@ -77,8 +78,14 @@ def run_backtest(
         "fires": len({s.rule_id for s in scores if s.tp or s.fp}),
         "survives_fp": len([s for s in scores if s.fp == 0 and s.tp]),
     }
-    # only score loaded (stateless, level-filtered) rules; ignore any engine fires outside `titles`
+    # FIX H acceptance gate (reconcile-not-relabel): with a ONE-source ruleset
+    # (engine compiled from exactly the loaded set), every engine fire must be a
+    # loaded rule and engine fires must equal scored fires on BOTH corpora. The
+    # old code merely asserted scores ⊆ titles (always true, since scores are
+    # built from loaded_rules) and silently dropped engine fires outside `titles`
+    # (the 767->2 benign-side gap). This now raises on any such discrepancy.
     assert all(s.rule_id in titles for s in scores)
+    assert_one_source(titles, attack_fires, benign_fires)
     # A11: worker-invariant reproducibility stamp over the aggregated fire set
     rh = run_hash(attack_fires | benign_fires)
     return rows, funnel, render_report(rows, funnel, source=source, min_events=min_events, run_hash=rh)

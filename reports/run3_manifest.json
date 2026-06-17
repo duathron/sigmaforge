@@ -1,0 +1,41 @@
+{
+  "attack_corpus": "EVTX-ATTACK-SAMPLES (native EVTX, all-malicious)",
+  "attack_fires": 312,
+  "attack_pc_breakdown": {
+    "open_errors": [
+      [
+        "Credential Access/CA_PetiPotam_etw_rpc_efsr_5_6.evtx",
+        "argument of type 'NoneType' is not iterable"
+      ]
+    ],
+    "pc": 1533,
+    "record_errors": 0,
+    "sec4688": 42,
+    "sysmon1": 1491,
+    "total": 9907
+  },
+  "attack_process_creation_events": 1533,
+  "benign_corpus": "combined: COMISET real slice + NextronSystems/evtx-baseline v0.8.4 all-evtx",
+  "benign_corpus_path": "data/comiset/combined_benign_sample.jsonl",
+  "benign_corpus_sha": "3320e77fa3be078db584c46e44788aa0532ac45a80fbf5f41777e02708b0768b",
+  "benign_eid1_total": 17124,
+  "benign_fires": 100,
+  "benign_label_split": {
+    "benign": 16962,
+    "malicious": 162
+  },
+  "level": [
+    "high",
+    "critical"
+  ],
+  "loaded_rule_count": 609,
+  "mapping_hash": "f09229ed6d5056d9a6bf176ea1a9efef46bac3b043a4dc1c775dc7433c2912fe",
+  "mapping_path": "data/mappings/comiset.yaml",
+  "positive_control_fired": true,
+  "precision_floor": 1000,
+  "recommended_precision_floor": 1712,
+  "ruleset_path": "data/rulesets/sigmaforge_loaded.json",
+  "ruleset_sha": "69a06fb8d3b66066bc8be98feea27028f6d6d23a535c102e4f3d68f84741a429",
+  "run_hash": "0a9ed9deeec74972efb3fe198a1a05d4e09b1f6b789d1806bac7a7d3d9859e88",
+  "zircolite_version": "3.7.6"
+}

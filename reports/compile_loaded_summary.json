@@ -1,0 +1,11 @@
+{
+  "loaded_rules": 609,
+  "loaded_titles": 609,
+  "staged_yml": 609,
+  "compiled_ok": 609,
+  "compiled_titles": 609,
+  "failed_count": 0,
+  "failed_titles": [],
+  "out_path": "data/rulesets/sigmaforge_loaded.json",
+  "pipeline": "sysmon"
+}
