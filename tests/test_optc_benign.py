@@ -71,6 +71,31 @@ _REC_PROCESS_START_TOPLEVEL = {
 }
 
 
+# Real OpTC Image path forms (the production corpus has ZERO clean C:\ paths):
+#  - NT-device form: \Device\HarddiskVolume1\...\foo.exe  (~48% of the slice)
+#  - bare basename:  PING.EXE                              (~50% of the slice)
+# The fixtures above only use clean C:\ paths, so these exercise the REAL shapes.
+_REC_NT_DEVICE_PATH = {
+    "object": "PROCESS",
+    "action": "CREATE",
+    "principal": "SYSADMIN-201\\bob",
+    "properties": {
+        "image_path": "\\Device\\HarddiskVolume1\\Windows\\System32\\cmd.exe",
+        "command_line": "cmd.exe /c whoami",
+        "parent_image_path": "\\Device\\HarddiskVolume1\\Windows\\explorer.exe",
+    },
+}
+_REC_BARE_BASENAME = {
+    "object": "PROCESS",
+    "action": "CREATE",
+    "principal": "SYSADMIN-201\\bob",
+    "properties": {
+        "image_path": "PING.EXE",
+        "command_line": "ping 10.0.0.1",
+    },
+}
+
+
 def _write_ecar_gz(path: Path, records: list[dict]) -> None:
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         for rec in records:
@@ -93,6 +118,41 @@ def test_reshape_keeps_process_create_drops_others():
     import hashlib
 
     assert src["sigmaforge_eid"] == hashlib.sha1(raw).hexdigest()
+
+
+def test_reshape_preserves_nt_device_image_verbatim():
+    """BLOCKER B1: real OpTC Image is NT-device form (\\Device\\HarddiskVolumeN\\...),
+    never a clean C:\\ path. The converter must pass it through VERBATIM — no path
+    normalization — so the path-form caveat in run6.md reflects what is actually stored
+    and downstream selector matching sees the true shape. Also assert it survives the
+    run4 precision projection into the Sigma `Image` field unchanged."""
+    raw = json.dumps(_REC_NT_DEVICE_PATH).encode("utf-8")
+    doc = mod.reshape_record(_REC_NT_DEVICE_PATH, raw)
+    assert doc is not None
+    src = doc["_source"]
+    assert src["process_path"] == "\\Device\\HarddiskVolume1\\Windows\\System32\\cmd.exe"
+    assert src["process_parent_path"] == "\\Device\\HarddiskVolume1\\Windows\\explorer.exe"
+
+    field_map = run4.load_comiset_field_map()
+    ev = run4.project_event(src, field_map)
+    assert ev["Image"] == "\\Device\\HarddiskVolume1\\Windows\\System32\\cmd.exe"
+    assert ev["ParentImage"] == "\\Device\\HarddiskVolume1\\Windows\\explorer.exe"
+
+
+def test_reshape_preserves_bare_basename_image_verbatim():
+    """BLOCKER B1: ~50% of the OpTC slice carries a BARE BASENAME (PING.EXE) with no
+    path separator. It must be preserved as-is — the converter must not synthesize a
+    leading separator — so an `Image|endswith: '\\ping.exe'` selector correctly FAILS
+    to match it (the caveat's whole point)."""
+    raw = json.dumps(_REC_BARE_BASENAME).encode("utf-8")
+    doc = mod.reshape_record(_REC_BARE_BASENAME, raw)
+    assert doc is not None
+    assert doc["_source"]["process_path"] == "PING.EXE"
+
+    ev = run4.project_event(doc["_source"], run4.load_comiset_field_map())
+    assert ev["Image"] == "PING.EXE"
+    # the load-bearing consequence: no leading separator, so endswith '\ping.exe' misses
+    assert not ev["Image"].lower().endswith("\\ping.exe")
 
 
 def test_reshape_drops_non_process_record():

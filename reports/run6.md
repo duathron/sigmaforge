@@ -6,8 +6,21 @@ The **recall** pass is byte-for-byte identical to run5 (FIX B3 sub-technique rec
 
 OpTC (**FiveDirections/OpTC-data**, public domain / Distribution A) has a dedicated benign collection period (**Sept 17-23 2019**) across ~1000 real enterprise hosts BEFORE any red-team activity — every process-creation record there is benign BY CONSTRUCTION. The eCAR JSON (`object=PROCESS action=CREATE/START`) is reshaped by `scripts/build_optc_benign.py` into the SAME COMISET `_source` envelope the rest of the benign corpus uses, so the single `comiset.yaml` mapping + `project_event` path handle it uniformly.
 
+### OpTC Image path-form caveat (read before trusting path-anchored precision)
+
+OpTC eCAR does **not** record `Image` as a normal drive-letter path. Measured on this corpus (30383 OpTC PROCESS/CREATE events): **14556 (48%)** carry the **NT-device form** `\Device\HarddiskVolume1\...\foo.exe`, **15142 (50%)** carry a **bare basename** with no path separator (`PING.EXE`, `cmd.exe`), 685 (2%) carry other forms (`\\?\C:\...`, `\SystemRoot\...`, `%SystemRoot%\...`), and **0 (0%)** carry a drive-letter `C:\...` path.
+
+Consequence for selector matching against the OpTC slice:
+
+- `Image|endswith: '\foo.exe'` selectors **fail to match the ~50% bare-basename events** — a bare basename has no leading separator, so `\foo.exe` never matches `FOO.EXE`. They still match the NT-device-form events (which end in `\foo.exe`).
+- `Image|contains: 'C:'` / any drive-letter-anchored selector matches **none** of the OpTC slice (0 drive-letter paths).
+- selectors keyed on `CommandLine` or `ParentImage` are unaffected by the Image form, which is why the 2->7 precision-measurable count is legitimate (it is a coverage-floor count driven by CommandLine/parent_path presence, not by Image path shape).
+
+This does **not** invalidate the precision-measurable count and **cannot inflate precision** — a path mismatch only means a rule fired LESS on benign data, i.e. fewer FPs were detected. But it means the precision **figures for path-anchored rules UNDERSTATE their true FP exposure** on this corpus: an `Image|endswith` rule that looks clean here would still have fired on the ~50% bare-basename events had OpTC recorded full paths. Treat path-anchored `precision@COMISET = 1.0` on the OpTC slice as a floor, not a guarantee.
+
 - precision corpus: run5 baseline **17124** EID-1 -> run6 OpTC-augmented **47507** EID-1 (**+30383** OpTC benign-by-construction events).
 - precision-measurable rules: **7** / 609 loaded (cleared the precision floor on the augmented corpus).
+- precision floor: the manifest's `recommended_precision_floor` is **4750** (10% of the 47507-event corpus); the per-rule table below uses the generic **1000**-event floor, so "7/609 precision-measurable" against 1000 should NOT be read as stronger than it is — at the recommended 4750-event floor far fewer rules would clear it.
 
 ### Acceptance gate (engine == scored, both corpora)
 

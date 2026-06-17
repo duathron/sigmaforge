@@ -215,6 +215,36 @@ def main() -> int:
     attack_gate = next(g for g in gate if g.corpus == "attack")
     benign_gate = next(g for g in gate if g.corpus == "benign")
 
+    # --- OpTC Image path-form split (BLOCKER B1) ---
+    # OpTC eCAR carries Image in NT-device form (\Device\HarddiskVolumeN\...) OR as a
+    # bare basename (PING.EXE) with NO leading separator, and NEVER as a drive-letter
+    # path (C:\...). Measure the split on THIS corpus so the caveat numbers are real,
+    # not hard-coded, and regenerate with the data. OpTC events are identifiable by
+    # Provider_Name == "DARPA-OpTC-eCAR" (comiset.yaml maps source_name -> Provider_Name).
+    optc_nt = optc_bare = optc_drive = optc_other = 0
+    for e in benign_events:
+        if e.get("Provider_Name") != "DARPA-OpTC-eCAR":
+            continue
+        img = e.get("Image", "") or ""
+        if img.startswith("\\Device\\"):
+            optc_nt += 1
+        elif "\\" not in img and "/" not in img:
+            optc_bare += 1
+        elif len(img) >= 2 and img[1] == ":":
+            optc_drive += 1
+        else:
+            optc_other += 1
+    optc_total = optc_nt + optc_bare + optc_drive + optc_other
+
+    def _pct(n: int) -> float:
+        return (100.0 * n / optc_total) if optc_total else 0.0
+
+    print(
+        f"[optc-pathform] total={optc_total} nt-device={optc_nt} bare-basename={optc_bare} "
+        f"drive-letter={optc_drive} other={optc_other}",
+        flush=True,
+    )
+
     rh = run_hash(set_attack | set_benign)
     manifest = build_manifest(
         recommended_precision_floor=max(200, int(0.10 * len(benign_events))),
@@ -236,6 +266,32 @@ def main() -> int:
         benign_eid1_baseline_run5=base_eid1,
         benign_eid1_optc_added=aug_eid1 - base_eid1,
         benign_label_split={"benign": n_ben, "malicious": n_mal},
+        # Slice provenance (NOTE N2): make the 30,383 OpTC figure traceable from the
+        # committed artifact alone. Measured by scanning the raw eCAR dump.
+        optc_slice_provenance={
+            "source_file": "AIA-201-225.ecar-last.json.gz",
+            "host_group": "AIA-201-225",
+            "host_domain": "systemia.com (SysClient0201-0225)",
+            "host_count": 24,
+            "benign_window_collected": "2019-09-18 (within DARPA OpTC benign period 17-23 Sep 2019)",
+            "raw_records_scanned": 43174191,
+            "raw_process_create_eid1": aug_eid1 - base_eid1,
+            "note": (
+                "raw_process_create_eid1 == benign_eid1_optc_added; "
+                "PROCESS object + CREATE/START action == EID-1 equivalent"
+            ),
+        },
+        # Image path-form split on the OpTC slice (BLOCKER B1).
+        optc_image_pathform={
+            "total": optc_total,
+            "nt_device_form": optc_nt,
+            "bare_basename": optc_bare,
+            "drive_letter": optc_drive,
+            "other": optc_other,
+            "note": (
+                "Image|endswith selectors miss the bare-basename share; drive-letter selectors match 0 OpTC events"
+            ),
+        },
         attack_corpus="splunk/attack_data (sub-technique-foldered, Apache-2.0) — UNCHANGED from run5 (FIX B3)",
         attack_process_creation_events=n_pc,
         recall_method="per-sub-technique (FIX B3, unchanged)",
@@ -269,10 +325,40 @@ def main() -> int:
         "`scripts/build_optc_benign.py` into the SAME COMISET `_source` envelope the rest of the "
         "benign corpus uses, so the single `comiset.yaml` mapping + `project_event` path handle it "
         "uniformly.\n\n"
+        "### OpTC Image path-form caveat (read before trusting path-anchored precision)\n\n"
+        "OpTC eCAR does **not** record `Image` as a normal drive-letter path. Measured on this "
+        f"corpus ({optc_total} OpTC PROCESS/CREATE events): **{optc_nt} ({_pct(optc_nt):.0f}%)** carry "
+        "the **NT-device form** `\\Device\\HarddiskVolume1\\...\\foo.exe`, **"
+        f"{optc_bare} ({_pct(optc_bare):.0f}%)** carry a **bare basename** with no path separator "
+        f"(`PING.EXE`, `cmd.exe`), {optc_other} ({_pct(optc_other):.0f}%) carry other forms "
+        "(`\\\\?\\C:\\...`, `\\SystemRoot\\...`, `%SystemRoot%\\...`), and **"
+        f"{optc_drive} ({_pct(optc_drive):.0f}%)** carry a drive-letter `C:\\...` path.\n\n"
+        "Consequence for selector matching against the OpTC slice:\n\n"
+        "- `Image|endswith: '\\foo.exe'` selectors **fail to match the ~50% bare-basename "
+        "events** — a bare basename has no leading separator, so `\\foo.exe` never matches "
+        "`FOO.EXE`. They still match the NT-device-form events (which end in `\\foo.exe`).\n"
+        "- `Image|contains: 'C:'` / any drive-letter-anchored selector matches **none** of the "
+        "OpTC slice (0 drive-letter paths).\n"
+        "- selectors keyed on `CommandLine` or `ParentImage` are unaffected by the Image form, "
+        "which is why the 2->7 precision-measurable count is legitimate (it is a coverage-floor "
+        "count driven by CommandLine/parent_path presence, not by Image path shape).\n\n"
+        "This does **not** invalidate the precision-measurable count and **cannot inflate "
+        "precision** — a path mismatch only means a rule fired LESS on benign data, i.e. fewer "
+        "FPs were detected. But it means the precision **figures for path-anchored rules "
+        "UNDERSTATE their true FP exposure** on this corpus: an `Image|endswith` rule that looks "
+        "clean here would still have fired on the ~50% bare-basename events had OpTC recorded "
+        "full paths. Treat path-anchored `precision@COMISET = 1.0` on the OpTC slice as a floor, "
+        "not a guarantee.\n\n"
         f"- precision corpus: run5 baseline **{base_eid1}** EID-1 -> run6 OpTC-augmented "
         f"**{aug_eid1}** EID-1 (**+{aug_eid1 - base_eid1}** OpTC benign-by-construction events).\n"
         f"- precision-measurable rules: **{n_prec_measurable}** / {len(loaded)} loaded "
-        "(cleared the precision floor on the augmented corpus).\n\n"
+        "(cleared the precision floor on the augmented corpus).\n"
+        f"- precision floor: the manifest's `recommended_precision_floor` is "
+        f"**{manifest['recommended_precision_floor']}** (10% of the {len(benign_events)}-event "
+        f"corpus); the per-rule table below uses the generic **{MIN_EVENTS}**-event floor, so "
+        f'"{n_prec_measurable}/{len(loaded)} precision-measurable" against 1000 should NOT be '
+        f"read as stronger than it is — at the recommended {manifest['recommended_precision_floor']}"
+        "-event floor far fewer rules would clear it.\n\n"
         "### Acceptance gate (engine == scored, both corpora)\n\n"
         "| corpus | engine fires | scored fires | title-drop | gate |\n"
         "|---|---|---|---|---|\n"

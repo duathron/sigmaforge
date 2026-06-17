@@ -20,6 +20,24 @@
   "loaded_rule_count": 609,
   "mapping_hash": "f09229ed6d5056d9a6bf176ea1a9efef46bac3b043a4dc1c775dc7433c2912fe",
   "mapping_path": "data/mappings/comiset.yaml",
+  "optc_image_pathform": {
+    "bare_basename": 15142,
+    "drive_letter": 0,
+    "note": "Image|endswith selectors miss the bare-basename share; drive-letter selectors match 0 OpTC events",
+    "nt_device_form": 14556,
+    "other": 685,
+    "total": 30383
+  },
+  "optc_slice_provenance": {
+    "benign_window_collected": "2019-09-18 (within DARPA OpTC benign period 17-23 Sep 2019)",
+    "host_count": 24,
+    "host_domain": "systemia.com (SysClient0201-0225)",
+    "host_group": "AIA-201-225",
+    "note": "raw_process_create_eid1 == benign_eid1_optc_added; PROCESS object + CREATE/START action == EID-1 equivalent",
+    "raw_process_create_eid1": 30383,
+    "raw_records_scanned": 43174191,
+    "source_file": "AIA-201-225.ecar-last.json.gz"
+  },
   "positive_control_fired": true,
   "precision_floor": 1000,
   "recall_method": "per-sub-technique (FIX B3, unchanged)",
