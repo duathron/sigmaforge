@@ -114,3 +114,124 @@ def test_precision_blocked_when_control_fails():
         min_events=1000,
     )
     assert rows[0]["precision@COMISET"] == "unmeasured"  # mapping/control broke -> A2 block
+
+
+# --- FIX B: per-technique recall in the orchestrator -------------------------
+
+TAGGED_RULE = {
+    "title": "PowerShell Enc",
+    "tags": ["attack.execution", "attack.t1059.001"],  # -> parent T1059
+    "detection": {"selection": {"Image|endswith": "\\powershell.exe"}, "condition": "selection"},
+}
+UNTAGGED_RULE = {
+    "title": "No Tag Rule",
+    "detection": {"selection": {"Image|endswith": "\\x.exe"}, "condition": "selection"},
+}
+OTHER_TECH_RULE = {
+    "title": "Other Tech Rule",
+    "tags": ["attack.t1490"],  # technique with ZERO attack events in our map
+    "detection": {"selection": {"Image|endswith": "\\y.exe"}, "condition": "selection"},
+}
+
+
+def test_per_technique_recall_scopes_denominator_to_the_rules_technique():
+    # 100 T1059 attack events exist; the rule fired on 3 of them -> recall 3/100,
+    # NOT 3/(whole corpus). Off-technique events do not enlarge the denominator.
+    attack = {MatchRecord("PowerShell Enc", f"e{i}", "malicious") for i in range(3)}
+    event_technique = {f"e{i}": "T1059" for i in range(3)}
+    technique_event_counts = {"T1059": 100, "T1003": 9999}  # pooled corpus is huge
+    rows, _, md = run_backtest(
+        [TAGGED_RULE],
+        attack,
+        set(),
+        _benign_events(),
+        n_attack_events=10103,  # legacy pooled denom — must be IGNORED in per-technique mode
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique=event_technique,
+        technique_event_counts=technique_event_counts,
+    )
+    r = rows[0]
+    assert r["recall"] == 3 / 100  # scoped to T1059, not pooled (would have been 3/10103)
+    assert r["recall_denom"] == 100
+    assert r["recall_numer"] == 3
+    assert r["recall_measurable"] is True
+    assert r["recall_measured_techniques"] == ["T1059"]
+    assert "per-technique" in md.lower()
+
+
+def test_per_technique_recall_ignores_fires_on_off_technique_events():
+    # rule's technique is T1059; it fired on one T1059 event and one T1003 event.
+    # only the on-technique fire counts toward this rule's recall.
+    attack = {
+        MatchRecord("PowerShell Enc", "good", "malicious"),
+        MatchRecord("PowerShell Enc", "wrong", "malicious"),
+    }
+    event_technique = {"good": "T1059", "wrong": "T1003"}
+    technique_event_counts = {"T1059": 10, "T1003": 10}
+    rows, _, _ = run_backtest(
+        [TAGGED_RULE],
+        attack,
+        set(),
+        _benign_events(),
+        n_attack_events=20,
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique=event_technique,
+        technique_event_counts=technique_event_counts,
+    )
+    r = rows[0]
+    assert r["recall_numer"] == 1  # only the T1059 fire
+    assert r["recall"] == 1 / 10
+
+
+def test_untagged_rule_is_unmeasured_not_zero():
+    rows, _, _ = run_backtest(
+        [UNTAGGED_RULE],
+        set(),
+        set(),
+        _benign_events(),
+        n_attack_events=100,
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique={"e0": "T1059"},
+        technique_event_counts={"T1059": 100},
+    )
+    r = rows[0]
+    assert r["recall"] == "unmeasured"  # NOT 0.0, NOT pooled
+    assert r["recall_measurable"] is False
+
+
+def test_technique_with_zero_attack_events_is_unmeasured():
+    # rule tagged T1490, but the corpus has ZERO T1490 attack events -> unmeasured.
+    rows, _, _ = run_backtest(
+        [OTHER_TECH_RULE],
+        set(),
+        set(),
+        _benign_events(),
+        n_attack_events=100,
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique={"e0": "T1059"},
+        technique_event_counts={"T1059": 100},  # no T1490 key -> 0 events
+    )
+    r = rows[0]
+    assert r["recall"] == "unmeasured"
+    assert r["recall_measurable"] is False
+
+
+def test_pooled_fallback_when_technique_inputs_absent():
+    # no per-technique inputs -> legacy pooled denominator, recall_measurable=None
+    attack = {MatchRecord("PowerShell Enc", f"e{i}", "malicious") for i in range(3)}
+    rows, _, _ = run_backtest(
+        [TAGGED_RULE],
+        attack,
+        set(),
+        _benign_events(),
+        n_attack_events=1533,
+        positive_control_fired=True,
+        min_events=1000,
+    )
+    r = rows[0]
+    assert r["recall"] == 3 / 1533  # pooled
+    assert r["recall_measurable"] is None

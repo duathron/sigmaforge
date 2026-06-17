@@ -50,3 +50,29 @@ def test_truly_identical_events_still_dedupe():
     out = [{"title": "R", "matches": [{"EventRecordID": 7, "Image": "x.exe"}, {"EventRecordID": 7, "Image": "x.exe"}]}]
     recs = parse_detections(out, corpus_label="malicious")
     assert len({r.event_id for r in recs}) == 1
+
+
+def test_technique_passthrough_keyed_on_stable_event_id():
+    # FIX B: event->technique map keyed on the SAME identity (_stable_event_id),
+    # technique resolved from the source EVTX basename via OriginalLogfile.
+    out = [
+        {
+            "title": "R",
+            "matches": [
+                {"Image": "a.exe", "OriginalLogfile": "ID4688-foo.evtx"},
+                {"Image": "b.exe", "OriginalLogfile": "ID1-bar.evtx"},
+                {"Image": "c.exe", "OriginalLogfile": "unmapped.evtx"},  # not in map -> skipped
+            ],
+        }
+    ]
+    ev_tech: dict[str, str] = {}
+    recs = parse_detections(
+        out,
+        corpus_label="malicious",
+        file_technique_map={"ID4688-foo.evtx": "T1059", "ID1-bar.evtx": "T1003"},
+        event_technique_out=ev_tech,
+    )
+    by_image = {m["Image"]: r.event_id for m, r in zip(out[0]["matches"], recs)}
+    assert ev_tech[by_image["a.exe"]] == "T1059"
+    assert ev_tech[by_image["b.exe"]] == "T1003"
+    assert by_image["c.exe"] not in ev_tech  # unmapped source file -> no technique

@@ -6,10 +6,12 @@ def render_report(
     fp_tuning_threshold: int = 5,
     run_hash: str | None = None,
     corpus_note: str | None = None,
+    recall_note: str | None = None,
 ) -> str:
     """A10/A8: the deliverable. A human-readable FP-tuning report.
     Leads with the corpus-scope + noisy-label caveat; precision labelled precision@SOURCE.
-    `corpus_note` MUST disclose the benign corpus composition when it is blended (A8 honesty)."""
+    `corpus_note` MUST disclose the benign corpus composition when it is blended (A8 honesty).
+    `recall_note` (FIX B) discloses how recall is measured (per-technique vs pooled)."""
     lines = [
         f"# Sigmaforge backtest report ({source})",
         "",
@@ -21,6 +23,7 @@ def render_report(
         f"the labeled native-EVTX attack corpora over PROCESS-CREATION events only (the loaded "
         f"ruleset is 100% process_creation). Precision floor: {min_events} evaluated events.",
         *([f"> **Benign corpus composition:** {corpus_note}"] if corpus_note else []),
+        *([f"> **Recall method (FIX B):** {recall_note}"] if recall_note else []),
         "",
         "> **Precision tautology caveat (BLOCKER-2):** a rule showing precision = 1.0 with fp = 0 "
         "is only trustworthy if benign-labelled events actually matched its selection. Rules whose "
