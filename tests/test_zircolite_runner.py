@@ -19,7 +19,34 @@ def test_parse_reads_passthrough_id_and_label():
     }
 
 
-def test_parse_evtx_fallback_id_and_corpus_label():
+def test_parse_evtx_fallback_uses_stable_hash_not_bare_recordid():
+    # EVTX rows have no sigmaforge_eid -> event_id is a stable hash of the row (NOT bare EventRecordID),
+    # and the corpus_label is applied.
     out = [{"title": "R", "matches": [{"EventRecordID": 42, "Image": "m.exe"}]}]
     recs = parse_detections(out, corpus_label="malicious")
-    assert (recs[0].event_id, recs[0].event_label) == ("42", "malicious")
+    assert recs[0].event_label == "malicious"
+    assert recs[0].event_id != "42"  # not the bare per-file counter
+    assert len(recs[0].event_id) == 40  # sha1 hex
+
+
+def test_eventrecordid_cross_file_collision_does_not_deflate_recall():
+    # FIX C regression: same EventRecordID=42 in two different files (different Image/Computer)
+    # must yield TWO distinct events, not collapse to one (which would silently deflate recall).
+    out = [
+        {
+            "title": "R",
+            "matches": [
+                {"EventRecordID": 42, "Image": "a.exe", "Computer": "HOST-A"},
+                {"EventRecordID": 42, "Image": "b.exe", "Computer": "HOST-B"},
+            ],
+        }
+    ]
+    recs = parse_detections(out, corpus_label="malicious")
+    assert len({r.event_id for r in recs}) == 2  # NOT collapsed to 1
+
+
+def test_truly_identical_events_still_dedupe():
+    # contrast: two byte-identical rows are the same event -> hash-collapse is correct dedup.
+    out = [{"title": "R", "matches": [{"EventRecordID": 7, "Image": "x.exe"}, {"EventRecordID": 7, "Image": "x.exe"}]}]
+    recs = parse_detections(out, corpus_label="malicious")
+    assert len({r.event_id for r in recs}) == 1

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -7,11 +8,23 @@ from sigmaforge.records import MatchRecord
 ZIRCOLITE = ["uv", "run", "python", "Zircolite/zircolite.py"]  # vendored 3.7.6
 
 
+def _stable_event_id(row: dict) -> str:
+    """Globally-unique event key (fix C). EventRecordID is a PER-EVTX-FILE counter, so using it
+    alone collapses record 42 of fileA with record 42 of fileB across a multi-file attack run and
+    silently deflates recall. Hash the whole flattened row instead: it carries Computer/UtcTime/
+    Image/CommandLine/... which differ across files even when EventRecordID repeats. Two genuinely
+    identical events still hash-collapse — that is correct dedup, not a collision bug."""
+    canonical = json.dumps(row, sort_keys=True, default=str)
+    return hashlib.sha1(canonical.encode()).hexdigest()
+
+
 def parse_detections(detections: list[dict], corpus_label: str | None = None) -> list[MatchRecord]:
     out: list[MatchRecord] = []
     for d in detections:
         for m in d.get("matches", []):
-            eid = m.get("sigmaforge_eid") or m.get("EventRecordID")
+            # benign COMISET rows carry the injected hash; native-EVTX rows do NOT -> derive a
+            # globally-unique key from the row (NOT bare EventRecordID, which collides across files).
+            eid = m.get("sigmaforge_eid") or _stable_event_id(m)
             label = m.get("sigmaforge_label") or corpus_label or "benign"
             out.append(MatchRecord(rule_id=d["title"], event_id=str(eid), event_label=label))
     return out
