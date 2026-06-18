@@ -1,15 +1,57 @@
 name: Release
+# Inlined (NOT a reusable workflow): PyPI Trusted Publishing matches the OIDC
+# workflow_ref, and a reusable workflow's claims don't match a publisher configured
+# for this repo (invalid-publisher). Keeping the publish job here = workflow_ref is
+# duathron/sigmaforge/.github/workflows/release.yml -> matches the TP config
+# (workflow: release.yml, environment: pypi). Steps mirror the proven shipwright
+# python-release.yml. workflow_dispatch lets us publish an already-tagged version.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  release:
-    uses: duathron/shipwright/.github/workflows/python-release.yml@main
-    with:
-      release-environment: pypi
-      prerelease: false
+  release-please:
+    name: Release PR / tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071  # v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Build + publish to PyPI (OIDC)
+    needs: release-please
+    # publish on a fresh release-please release, OR on a manual dispatch (to ship an
+    # already-tagged version, e.g. after fixing the trusted-publisher config).
+    if: ${{ needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    environment: pypi
     permissions:
-      contents: write
-      pull-requests: write
       id-token: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+      - name: Build distributions
+        run: uv build
+      - name: Generate CycloneDX SBOM
+        run: uvx --from cyclonedx-bom cyclonedx-py environment --output-format JSON --output-file sbom.cdx.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        with:
+          skip-existing: true
+          attestations: true
