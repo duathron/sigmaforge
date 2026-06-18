@@ -419,11 +419,15 @@ wheels = [
 [[package]]
 name = "shipwright-kit"
 version = "0.8.0"
-source = { git = "https://github.com/duathron/shipwright?rev=main#00d0fc33ba89c71b9fb0b0d53cadefa7f521d8b1" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/92/6316ed26af51b895e07dd6b2f765663ff0b1e3ac145c33c940c86f531adb/shipwright_kit-0.8.0.tar.gz", hash = "sha256:5021cd40f6067803d3b777c9239e27de8e3800cf31efaec5be6c2958696c83e9", size = 21949, upload-time = "2026-06-12T12:38:13.224Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/90/a7d990dc8fec52fb9f25355a61c9892076c45491e91906019b599a31aaba/shipwright_kit-0.8.0-py3-none-any.whl", hash = "sha256:c817c1135ac7814ff7eb9b32fed8119d9e3d053eb423b59556f308535e71fa59", size = 20967, upload-time = "2026-06-12T12:38:11.979Z" },
+]
 
 [[package]]
 name = "sigmaforge"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -444,7 +448,7 @@ dev = [
 requires-dist = [
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "rich", specifier = ">=13.7.0" },
-    { name = "shipwright-kit", git = "https://github.com/duathron/shipwright?rev=main" },
+    { name = "shipwright-kit", specifier = ">=0.8.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
 
