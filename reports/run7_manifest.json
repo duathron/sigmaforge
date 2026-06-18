@@ -1,0 +1,71 @@
+{
+  "attack_corpus": "splunk/attack_data (sub-technique-foldered, Apache-2.0) \u2014 UNCHANGED from run5 (FIX B3)",
+  "attack_fires": 1163,
+  "attack_process_creation_events": 24644,
+  "benign_corpus": "run7: combined (COMISET real slice + NextronSystems/evtx-baseline) + DARPA OpTC benign week, PARTIAL pull (run6: AIA-201-225 + run7: AIA-101-125; 1 of 5 intended run7 host groups \u2014 gdown failed on the rest; FiveDirections/OpTC-data, Distribution A)",
+  "benign_corpus_path": "data/comiset/combined_optc_benign_sample.jsonl",
+  "benign_corpus_sha": "602d0371f5389bc6552e3a835b2b7bbc22295efc9a347b064b54fcb1a79920f3",
+  "benign_eid1_baseline_run5": 17124,
+  "benign_eid1_optc_added": 80276,
+  "benign_eid1_optc_run6": 30383,
+  "benign_eid1_optc_run7_new": 49893,
+  "benign_eid1_total": 97400,
+  "benign_fires": 50417,
+  "benign_label_split": {
+    "benign": 97238,
+    "malicious": 162
+  },
+  "level": [
+    "high",
+    "critical"
+  ],
+  "loaded_rule_count": 609,
+  "mapping_hash": "f09229ed6d5056d9a6bf176ea1a9efef46bac3b043a4dc1c775dc7433c2912fe",
+  "mapping_path": "data/mappings/comiset.yaml",
+  "optc_image_pathform": {
+    "bare_basename": 41115,
+    "drive_letter": 0,
+    "note": "Image|endswith selectors miss the bare-basename share; drive-letter selectors match 0 OpTC events",
+    "nt_device_form": 37354,
+    "other": 1807,
+    "total": 80276
+  },
+  "optc_slice_provenance": {
+    "note": "PROCESS object + CREATE/START action == EID-1 equivalent; run7 dumps identity-deduped by sigmaforge_eid against the existing corpus",
+    "optc_total_eid1": 80276,
+    "run6_slice": {
+      "benign_window_collected": "2019-09-18 (within OpTC benign period 17-23 Sep 2019)",
+      "day_folder": "18-19Sep19",
+      "host_count": 24,
+      "host_domain": "systemia.com (SysClient0201-0225)",
+      "host_group": "AIA-201-225",
+      "raw_process_create_eid1": 30383,
+      "source_file": "AIA-201-225.ecar-last.json.gz"
+    },
+    "run7_dumps": [
+      {
+        "day": "17-18Sep19",
+        "duplicates_skipped": 0,
+        "file_name": "AIA-101-125.ecar-last.json.gz",
+        "host_group": "AIA-101-125",
+        "new_appended": 49893,
+        "produced_eid1": 49893,
+        "raw_gb": 3.997
+      }
+    ]
+  },
+  "positive_control_fired": true,
+  "precision_floor": 1000,
+  "recall_method": "per-sub-technique (FIX B3, unchanged)",
+  "recall_technique_map": "data/comiset/attack_data_technique_map.json",
+  "recall_technique_map_sha": "a51fe727997406b8e00a6bf96b304bbf027303e556c8b54d43b04e378e2387ce",
+  "recommended_precision_floor": 9740,
+  "rules_precision_measurable": 8,
+  "rules_recall_measurable": 338,
+  "rules_recall_unmeasured": 271,
+  "rules_with_technique_tag": 555,
+  "ruleset_path": "data/rulesets/sigmaforge_loaded.json",
+  "ruleset_sha": "69a06fb8d3b66066bc8be98feea27028f6d6d23a535c102e4f3d68f84741a429",
+  "run_hash": "e6aad42bbb347b2735d4a91552c643b392f5b1dbbb63af572776a5112c2472eb",
+  "zircolite_version": "3.7.6"
+}

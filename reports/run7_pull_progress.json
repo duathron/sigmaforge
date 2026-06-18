@@ -1,0 +1,18 @@
+{
+  "optc_before": 30383,
+  "optc_after": 80276,
+  "optc_newly_added": 49893,
+  "raw_gb_downloaded": 4.0,
+  "files_pulled": 1,
+  "pulled": [
+    {
+      "day": "17-18Sep19",
+      "host_group": "AIA-101-125",
+      "file_name": "AIA-101-125.ecar-last.json.gz",
+      "raw_gb": 3.997,
+      "produced_eid1": 49893,
+      "new_appended": 49893,
+      "duplicates_skipped": 0
+    }
+  ]
+}
