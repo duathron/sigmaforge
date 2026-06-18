@@ -122,7 +122,7 @@ Built with the [Shipwright](https://github.com/duathron/shipwright) dev framewor
 
 ```bash
 uv sync --dev
-uv run pytest        # 109 tests
+uv run pytest        # 110 tests (engine smoke test skips without Zircolite)
 uv run ruff check .
 ```
 

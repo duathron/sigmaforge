@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Smoke PowerShell",
+    "id": "00000000-0000-0000-0000-000000000001",
+    "status": "test",
+    "description": "Minimal fixture rule for the end-to-end smoke test (not a real detection).",
+    "author": "",
+    "tags": [],
+    "falsepositives": [],
+    "level": "high",
+    "rule": [
+      "SELECT * FROM logs WHERE EventID=1 AND Image LIKE '%\\\\powershell.exe' ESCAPE '\\'"
+    ],
+    "filename": "",
+    "channel": [],
+    "eventid": [
+      1
+    ]
+  }
+]

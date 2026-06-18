@@ -1,0 +1,12 @@
+title: Smoke PowerShell
+id: 00000000-0000-0000-0000-000000000001
+status: test
+description: Minimal fixture rule for the end-to-end smoke test (not a real detection).
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\powershell.exe'
+  condition: selection
+level: high
