@@ -3,6 +3,18 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [0.2.0](https://github.com/duathron/sigmaforge/compare/v0.1.0...v0.2.0) (2026-06-18)
+
+
+### Features
+
+* **precision:** run7 — OpTC benign +1 host group (honest diminishing-return result) ([b6fe35a](https://github.com/duathron/sigmaforge/commit/b6fe35af486761babcbdc0251217c6c7b3c3e97f))
+
+
+### Bug Fixes
+
+* **ingest:** remove hardcoded cwd from shipped run_shard + add reproducibility tooling ([665cbe9](https://github.com/duathron/sigmaforge/commit/665cbe9356e273695be412e50bd0116d3985871a))
+
 ## 0.1.0 (2026-06-18)
 
 
