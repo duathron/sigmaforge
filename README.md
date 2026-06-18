@@ -91,13 +91,38 @@ separately (see above).
 | [NextronSystems/evtx-baseline](https://github.com/NextronSystems/evtx-baseline) | precision (goodware baseline) | Apache-2.0 |
 | Self-generated (`scripts/selfgen/`) | precision (targeted admin/LOLBin noise) | your own lab |
 
+## Reproduce a backtest from a clone
+
+The pip package is the library/CLI; a full end-to-end backtest needs the engine and
+corpora, which are not bundled (engine = large third-party tool; corpora = large and
+separately licensed). To go from a fresh clone to a runnable backtest:
+
+```bash
+uv sync --group backtest          # script deps (pyyaml, evtx, gdown)
+bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 + its runtime deps
+```
+
+Then obtain the corpora (see the table above) into `~/sigmaforge-v0/` and build the
+combined samples with the `scripts/build_*_benign.py` / `scripts/build_*_corpus.py`
+helpers, compile the ruleset, and run a backtest:
+
+```bash
+uv run python scripts/compile_loaded_ruleset.py   # SigmaHQ rules -> one Zircolite ruleset
+uv run python scripts/run7_backtest.py            # -> reports/run7.md (+ manifest)
+```
+
+Run scripts from the repo root (the engine working dir defaults to the current
+directory; override with `SIGMAFORGE_HOME` if you keep `Zircolite/` elsewhere). The
+`reports/run*.md` + `*_manifest.json` are committed so the results are inspectable
+without re-running.
+
 ## Development
 
 Built with the [Shipwright](https://github.com/duathron/shipwright) dev framework.
 
 ```bash
 uv sync --dev
-uv run pytest        # 108 tests
+uv run pytest        # 109 tests
 uv run ruff check .
 ```
 

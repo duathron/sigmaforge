@@ -1,6 +1,18 @@
+import os
+
 import pytest
 
-from sigmaforge.ingest.zircolite_runner import parse_detections, run_shard
+from sigmaforge.ingest.zircolite_runner import _zircolite_home, parse_detections, run_shard
+
+
+def test_zircolite_home_is_portable_not_hardcoded(monkeypatch):
+    # reproducibility: the engine working dir must NOT be a hardcoded absolute path
+    # (the shipped 0.1.0 had cwd="/Users/christianhuhn/..."). Defaults to the current
+    # working directory; overridable via SIGMAFORGE_HOME.
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    assert _zircolite_home() == os.getcwd()
+    monkeypatch.setenv("SIGMAFORGE_HOME", "/tmp/some/engine/dir")
+    assert _zircolite_home() == "/tmp/some/engine/dir"
 
 
 def test_parse_reads_passthrough_id_and_label():

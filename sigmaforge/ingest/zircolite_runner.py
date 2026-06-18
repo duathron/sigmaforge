@@ -1,11 +1,23 @@
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 
 from sigmaforge.records import MatchRecord
 
-ZIRCOLITE = ["uv", "run", "python", "Zircolite/zircolite.py"]  # vendored 3.7.6
+# The Zircolite engine is NOT bundled with the pip package (large third-party tool).
+# Both the invocation and its working directory are configurable so a clone/install on
+# any machine works — no hardcoded path. SIGMAFORGE_HOME is the dir that CONTAINS the
+# `Zircolite/` checkout (defaults to the current working directory, which is the repo
+# root when the run scripts are launched from there). SIGMAFORGE_ZIRCOLITE overrides the
+# engine command (e.g. to point at a system install).
+ZIRCOLITE = os.environ.get("SIGMAFORGE_ZIRCOLITE", "uv run python Zircolite/zircolite.py").split()
+
+
+def _zircolite_home() -> str:
+    """Working dir for the engine subprocess: SIGMAFORGE_HOME or the current dir."""
+    return os.environ.get("SIGMAFORGE_HOME", os.getcwd())
 
 
 def _stable_event_id(row: dict) -> str:
@@ -82,7 +94,7 @@ def run_shard(
         cmd += ["--xml-input"]
     if mapping_path:
         cmd += ["--config", mapping_path]
-    subprocess.run(cmd, check=True, cwd="/Users/christianhuhn/PycharmProjects/ai_project1/sigmaforge")
+    subprocess.run(cmd, check=True, cwd=_zircolite_home())
     with open(out) as fh:
         return parse_detections(
             json.load(fh),

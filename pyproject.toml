@@ -25,6 +25,10 @@ sigmaforge = "sigmaforge.main:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.8", "pre-commit>=4.0", "hypothesis>=6.0"]
+# Deps the corpus-building / backtest SCRIPTS need (not the shipped library). The
+# Zircolite engine itself + its own requirements are installed by scripts/setup_engine.sh.
+# Install with: uv sync --group backtest
+backtest = ["pyyaml>=6.0", "evtx>=0.6.2", "gdown>=5.2"]
 
 [tool.setuptools.packages.find]
 include = ["sigmaforge*"]
