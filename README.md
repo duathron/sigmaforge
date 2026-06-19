@@ -41,18 +41,24 @@ flowchart LR
     G --> O[report.md + manifest]
 ```
 
-The real pipeline is **script-driven** (`scripts/run6_backtest.py` is the current
-end-to-end path):
+The pipeline is one module (`sigmaforge.pipeline`); the CLI and the
+`scripts/run*_backtest.py` runs call the **same** code — there is no weaker shipped
+path. Two verbs, split by honesty (you cannot compute recall/precision without labels):
 
 ```bash
-uv run python scripts/compile_loaded_ruleset.py   # rules -> one Zircolite ruleset
-uv run python scripts/run6_backtest.py            # backtest -> reports/run6.md
+# pip-runnable: rules x ARBITRARY logs -> hits only (no labels -> precision/recall = unmeasured).
+# Needs only the engine, no corpora.
+sigmaforge hunt --rules my_rules/ --logs /path/to/logs
+
+# the real measurement: rules x LABELED corpora -> per-technique recall + label-aware
+# precision + honesty gates + report.md + manifest.json. Needs the corpora (else it
+# prints a teaching error and points you at `hunt`).
+sigmaforge backtest --rules my_rules/ --config sigmaforge.yaml
 ```
 
-> [!WARNING]
-> The shipped CLI (`sigmaforge backtest`) is a **weaker, work-in-progress path** and
-> is not the way the real reports were produced. Use the scripts above. The CLI is
-> kept for the future one-command experience, not parity.
+`--rules` takes a single `.yml` or a directory (auto-compiled). The engine + corpora
+are not bundled (see *Reproduce a backtest*); the committed `reports/run*.md` are
+inspectable without running anything.
 
 ## Status
 
@@ -62,7 +68,7 @@ uv run python scripts/run6_backtest.py            # backtest -> reports/run6.md
 | Precision / false-positives (label-aware, gated) | **Working** — 7/609 measurable on current benign corpus (run6) |
 | Honesty gates (floor, positive-control, no-self-review) | **Working** |
 | Reproducible manifest (run_hash, corpus SHAs, provenance) | **Working** |
-| One-command CLI (`sigmaforge backtest`) | **WIP** — weaker than the scripts |
+| One-command CLI (`sigmaforge backtest` + `hunt`) | **Working** — same pipeline as the scripts (extracted to `sigmaforge.pipeline`); `hunt` is pip-runnable without corpora |
 | Self-generated benign corpus | **Kit ready** (`scripts/selfgen/`), needs a Windows VM run |
 
 > [!IMPORTANT]
@@ -122,7 +128,7 @@ Built with the [Shipwright](https://github.com/duathron/shipwright) dev framewor
 
 ```bash
 uv sync --dev
-uv run pytest        # 110 tests (engine smoke test skips without Zircolite)
+uv run pytest        # 113 tests (engine-dependent tests skip without Zircolite)
 uv run ruff check .
 ```
 
