@@ -1,6 +1,27 @@
 """FIX B unit tests for sigmaforge.score.recall (per-technique recall logic)."""
 
-from sigmaforge.score.recall import UNMEASURED, per_technique_recall, rule_techniques
+from sigmaforge.score.recall import (
+    REASON_NO_TAG,
+    REASON_TECH_0_EVENTS,
+    UNMEASURED,
+    per_technique_recall,
+    per_technique_recall_reason,
+    rule_techniques,
+)
+
+
+def test_recall_reason_no_tag():
+    assert per_technique_recall_reason(set(), {"T1059.001": 10}) == REASON_NO_TAG
+
+
+def test_recall_reason_technique_zero_events():
+    # rule tagged for a technique the corpus has zero events of -> denom 0
+    assert per_technique_recall_reason({"T9999"}, {"T1059.001": 10}) == REASON_TECH_0_EVENTS
+
+
+def test_recall_reason_none_when_measured():
+    # rule's technique has corpus events -> measured, no reason code
+    assert per_technique_recall_reason({"T1059.001"}, {"T1059.001": 10}) is None
 
 
 def test_rule_techniques_keeps_subtechnique_granularity():

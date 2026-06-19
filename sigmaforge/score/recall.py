@@ -38,6 +38,12 @@ import re
 
 UNMEASURED = "unmeasured"
 
+# Reason-codes for the two unmeasured recall branches (net-new, additive). These
+# NAME the conditions that `per_technique_recall` already returns UNMEASURED for,
+# so a report/manifest can render WHY a rule is unmeasured instead of a bare token.
+REASON_NO_TAG = "no-tag"  # rule carries no usable ATT&CK technique tag
+REASON_TECH_0_EVENTS = "technique-0-events"  # tags match zero corpus attack events
+
 # Keep declared tag granularity: attack.t1059.001 -> T1059.001; bare attack.t1059 -> T1059.
 _TECH_TAG = re.compile(r"^attack\.(t\d{4}(?:\.\d{3})?)$", re.IGNORECASE)
 
@@ -121,3 +127,23 @@ def per_technique_recall(
 
     numer = sum(1 for eid in fired_event_ids if _event_matches_rule(event_technique.get(eid), techniques))
     return numer / denom, numer, denom, measured
+
+
+def per_technique_recall_reason(techniques: set[str], technique_event_counts: dict[str, int]) -> str | None:
+    """Reason-code for WHY a rule's recall is unmeasured, or ``None`` if measured.
+
+    Net-new + additive: mirrors the two UNMEASURED branches of
+    ``per_technique_recall`` WITHOUT changing its numeric return — so the C1
+    semantic-equivalence gate is preserved.
+
+    - ``REASON_NO_TAG`` when the rule has no usable technique tag, else
+    - ``REASON_TECH_0_EVENTS`` when its tags match zero corpus attack events
+      (``denom == 0``), else
+    - ``None`` (the rule is measurable against this corpus).
+    """
+    if not techniques:
+        return REASON_NO_TAG
+    denom, _ = _technique_event_count_for_rule(techniques, technique_event_counts)
+    if denom == 0:
+        return REASON_TECH_0_EVENTS
+    return None
