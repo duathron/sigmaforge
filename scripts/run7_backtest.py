@@ -21,31 +21,34 @@ PRECONDITION: the enlarged corpus must exist at BENIGN_SAMPLE (see below). Build
 which appends additional OpTC benign-week records onto the run6 combined corpus in place.
 
 Engine: vendored Zircolite 3.7.6, SAME compiled-from-loaded ruleset both passes.
+
+THIS SCRIPT IS A THIN CALLER. The corpus-agnostic glue lives in
+`sigmaforge.pipeline.run_backtest_pipeline`; this script holds the run7 constants and
+computes its OWN run7/OpTC-specific provenance (the OpTC Image path-form split, the
+run5/run6/run7 EID deltas, the OpTC slice/pull provenance) from the benign corpus it
+owns, then injects it via the report header + the manifest merge. It is the
+semantic-equivalence regression oracle for the extraction.
 """
 
 from __future__ import annotations
 
-import glob
-import hashlib
 import json
 import sys
 from pathlib import Path
 
-import yaml
-
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from sigmaforge.ingest.ruleload import partition_rules  # noqa: E402
-from sigmaforge.ingest.zircolite_runner import run_shard  # noqa: E402
-from sigmaforge.orchestrate import run_backtest  # noqa: E402
-from sigmaforge.runmanifest import build_manifest, run_hash  # noqa: E402
-from sigmaforge.score.acceptance import assert_one_source  # noqa: E402
-from sigmaforge.score.recall import rule_techniques  # noqa: E402
+from sigmaforge.pipeline import (  # noqa: E402
+    BacktestResult,
+    PipelineConfig,
+    run_backtest_pipeline,
+)
 
 COMPILED_RULESET = str(REPO / "data" / "rulesets" / "sigmaforge_loaded.json")
 COMISET_MAPPING = str(REPO / "data" / "mappings" / "comiset.yaml")
 EVTX_DEFAULT_CFG = str(REPO / "Zircolite" / "config" / "fieldMappings.yaml")
+LOADED_RULES_GLOB = str(REPO / "sigma/rules/windows/process_creation/*.yml")
 # recall corpus + technique map: UNCHANGED from run5 (FIX B3)
 RECALL_CORPUS = str(Path.home() / "sigmaforge-v0" / "attack_data_corpus")
 TECHNIQUE_MAP = REPO / "data" / "comiset" / "attack_data_technique_map.json"
@@ -65,42 +68,6 @@ RUN6_OPTC_EID1 = 30383
 PULL_PROGRESS = REPO / "reports" / "run7_pull_progress.json"
 
 
-def _sha256_file(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def load_comiset_field_map() -> dict[str, str]:
-    with open(COMISET_MAPPING) as fh:
-        cfg = yaml.safe_load(fh)
-    out = {}
-    for raw, sigma in (cfg.get("mappings") or {}).items():
-        if raw.startswith("_source."):
-            out[raw[len("_source.") :]] = sigma
-    return out
-
-
-def project_event(src: dict, field_map: dict[str, str]) -> dict:
-    ev = {}
-    for k, v in src.items():
-        ev[field_map.get(k, k)] = v
-    return ev
-
-
-def load_loaded_rules() -> list[dict]:
-    rules = []
-    for f in glob.glob(str(REPO / "sigma/rules/windows/process_creation/*.yml")):
-        with open(f) as fh:
-            for doc in yaml.safe_load_all(fh):
-                if doc:
-                    rules.append(doc)
-    loaded, _ = partition_rules(rules)
-    return loaded
-
-
 def _count_eid1(path: str) -> int:
     if not Path(path).exists():
         return 0
@@ -112,147 +79,91 @@ def _count_eid1(path: str) -> int:
     return n
 
 
-def main() -> int:
-    if not Path(COMPILED_RULESET).exists():
-        print(f"[FATAL] {COMPILED_RULESET} missing. Run scripts/compile_loaded_ruleset.py first.", flush=True)
-        return 2
-    if not TECHNIQUE_MAP.exists():
-        print(f"[FATAL] {TECHNIQUE_MAP} missing. Run scripts/build_attack_data_corpus.py first.", flush=True)
-        return 2
-    if not Path(BENIGN_SAMPLE).exists():
-        print(
-            f"[FATAL] {BENIGN_SAMPLE} missing. Build it with scripts/build_optc_benign.py "
-            "(see this script's docstring).",
-            flush=True,
-        )
-        return 2
+def _load_benign_events() -> list[dict]:
+    """Reload the benign corpus the run7 caller OWNS, to compute run-specific
+    provenance (the OpTC Image path-form split) — corpus-specific, not pipeline glue."""
+    from sigmaforge.pipeline import _load_comiset_field_map, _project_event
 
-    loaded = load_loaded_rules()
-    loaded_titles = {r["title"] for r in loaded}
-    print(f"[loaded] {len(loaded)} high+critical stateless process_creation rules", flush=True)
-
-    n_tagged = sum(1 for r in loaded if rule_techniques(r))
-    print(f"[rule->technique] {n_tagged}/{len(loaded)} rules carry a usable ATT&CK technique tag", flush=True)
-
-    tmap = json.loads(TECHNIQUE_MAP.read_text())
-    technique_event_counts = tmap["technique_event_counts"]
-    file_technique = tmap["file_technique"]
-    n_pc = tmap["total_pc"]
-
-    base_eid1 = _count_eid1(BENIGN_BASELINE)
-    aug_eid1 = _count_eid1(BENIGN_SAMPLE)
-    optc_total_eid1 = aug_eid1 - base_eid1  # ALL OpTC (run6 slice + run7 enlargement)
-    optc_run7_added = optc_total_eid1 - RUN6_OPTC_EID1
-    print(
-        f"[precision] benign corpus: run5 baseline={base_eid1} -> run6={base_eid1 + RUN6_OPTC_EID1} "
-        f"-> run7 enlarged={aug_eid1} "
-        f"(OpTC total={optc_total_eid1}; +{optc_run7_added} new in run7 over run6's {RUN6_OPTC_EID1})",
-        flush=True,
-    )
-
-    # --- Recall pass — IDENTICAL to run5 (FIX B3) ---
-    print("[recall] running Zircolite on the sub-technique attack_data corpus (loaded ruleset) ...", flush=True)
-    event_technique: dict[str, str] = {}
-    attack_fires = run_shard(
-        RECALL_CORPUS,
-        COMPILED_RULESET,
-        mapping_path=EVTX_DEFAULT_CFG,
-        json_input=False,
-        xml_input=True,
-        corpus_label="malicious",
-        file_technique_map=file_technique,
-        event_technique_out=event_technique,
-    )
-    print(
-        f"[recall] attack_fires={len(attack_fires)}; fired events with a technique={len(event_technique)}",
-        flush=True,
-    )
-
-    # --- Precision pass — OpTC-AUGMENTED benign corpus, SAME one-source ruleset ---
-    print("[precision] running Zircolite on OpTC-augmented benign corpus (loaded ruleset) ...", flush=True)
-    benign_fires = run_shard(BENIGN_SAMPLE, COMPILED_RULESET, mapping_path=COMISET_MAPPING, json_input=True)
-    print(f"[precision] benign_fires={len(benign_fires)}", flush=True)
-
-    field_map = load_comiset_field_map()
-    benign_events = []
+    field_map = _load_comiset_field_map(COMISET_MAPPING)
+    events: list[dict] = []
     with open(BENIGN_SAMPLE) as fh:
         for line in fh:
             doc = json.loads(line)
             src = doc.get("_source", {})
-            ev = project_event(src, field_map)
+            ev = _project_event(src, field_map)
             ev["sigmaforge_label"] = src.get("sigmaforge_label", "benign")
-            benign_events.append(ev)
+            events.append(ev)
+    return events
 
-    n_mal = sum(1 for e in benign_events if e.get("sigmaforge_label") == "malicious")
-    n_ben = len(benign_events) - n_mal
-    print(f"[precision] benign_events={len(benign_events)} malicious={n_mal} benign={n_ben}", flush=True)
 
-    pc_fired = any(f.event_label == "malicious" for f in benign_fires)
-    print(f"[positive-control] fired={pc_fired}", flush=True)
-
-    set_attack, set_benign = set(attack_fires), set(benign_fires)
-    gate = assert_one_source(loaded_titles, set_attack, set_benign)
-    for g in gate:
-        print(f"[gate] {g.reason()}", flush=True)
-
-    rows, funnel, report_md = run_backtest(
-        loaded_rules=loaded,
-        attack_fires=set_attack,
-        benign_fires=set_benign,
-        benign_events=benign_events,
-        n_attack_events=n_pc,
-        positive_control_fired=pc_fired,
-        min_events=MIN_EVENTS,
-        source="COMISET",
-        event_technique=event_technique,
-        technique_event_counts=technique_event_counts,
-    )
-
-    n_measurable = sum(1 for r in rows if r["recall_measurable"])
-    n_unmeasured = len(rows) - n_measurable
-    # precision-measurable = the precision floor was cleared (precision is a float, not "unmeasured")
-    prec_key = "precision@COMISET"
-    n_prec_measurable = sum(1 for r in rows if isinstance(r.get(prec_key), float))
-    print(
-        f"[recall] measurable={n_measurable} unmeasured={n_unmeasured}; "
-        f"[precision] precision-measurable rules={n_prec_measurable}",
-        flush=True,
-    )
-
-    attack_gate = next(g for g in gate if g.corpus == "attack")
-    benign_gate = next(g for g in gate if g.corpus == "benign")
-
-    # --- OpTC Image path-form split (BLOCKER B1) ---
-    # OpTC eCAR carries Image in NT-device form (\Device\HarddiskVolumeN\...) OR as a
-    # bare basename (PING.EXE) with NO leading separator, and NEVER as a drive-letter
-    # path (C:\...). Measure the split on THIS corpus so the caveat numbers are real,
-    # not hard-coded, and regenerate with the data. OpTC events are identifiable by
-    # Provider_Name == "DARPA-OpTC-eCAR" (comiset.yaml maps source_name -> Provider_Name).
-    optc_nt = optc_bare = optc_drive = optc_other = 0
+def _optc_pathform_split(benign_events: list[dict]) -> dict[str, int]:
+    """run7/OpTC-specific provenance computed from the corpus the caller owns."""
+    nt = bare = drive = other = 0
     for e in benign_events:
         if e.get("Provider_Name") != "DARPA-OpTC-eCAR":
             continue
         img = e.get("Image", "") or ""
         if img.startswith("\\Device\\"):
-            optc_nt += 1
+            nt += 1
         elif "\\" not in img and "/" not in img:
-            optc_bare += 1
+            bare += 1
         elif len(img) >= 2 and img[1] == ":":
-            optc_drive += 1
+            drive += 1
         else:
-            optc_other += 1
+            other += 1
+    return {"nt_device_form": nt, "bare_basename": bare, "drive_letter": drive, "other": other}
+
+
+def run() -> BacktestResult:
+    if not Path(COMPILED_RULESET).exists():
+        raise SystemExit(f"[FATAL] {COMPILED_RULESET} missing. Run scripts/compile_loaded_ruleset.py first.")
+    if not TECHNIQUE_MAP.exists():
+        raise SystemExit(f"[FATAL] {TECHNIQUE_MAP} missing. Run scripts/build_attack_data_corpus.py first.")
+    if not Path(BENIGN_SAMPLE).exists():
+        raise SystemExit(
+            f"[FATAL] {BENIGN_SAMPLE} missing. Build it with scripts/build_optc_benign.py "
+            "(see this script's docstring)."
+        )
+
+    cfg = PipelineConfig(
+        compiled_ruleset=COMPILED_RULESET,
+        loaded_rules_glob=LOADED_RULES_GLOB,
+        attack_corpus=RECALL_CORPUS,
+        technique_map=str(TECHNIQUE_MAP),
+        benign_sample=BENIGN_SAMPLE,
+        comiset_mapping=COMISET_MAPPING,
+        evtx_cfg=EVTX_DEFAULT_CFG,
+        min_events=MIN_EVENTS,
+        source="COMISET",
+    )
+    res = run_backtest_pipeline(cfg)
+
+    loaded_count = res.loaded_rule_count
+    n_prec_measurable = res.rules_precision_measurable
+
+    # --- run7/OpTC-specific provenance computed from the corpus the caller OWNS ---
+    benign_events = _load_benign_events()
+    n_ben_total = len(benign_events)
+    n_mal = sum(1 for e in benign_events if e.get("sigmaforge_label") == "malicious")
+    n_ben = n_ben_total - n_mal  # noqa: F841 (kept for parity; label split lives in the manifest body)
+
+    base_eid1 = _count_eid1(BENIGN_BASELINE)
+    aug_eid1 = _count_eid1(BENIGN_SAMPLE)
+    optc_total_eid1 = aug_eid1 - base_eid1
+    optc_run7_added = optc_total_eid1 - RUN6_OPTC_EID1
+
+    pf = _optc_pathform_split(benign_events)
+    optc_nt, optc_bare, optc_drive, optc_other = (
+        pf["nt_device_form"],
+        pf["bare_basename"],
+        pf["drive_letter"],
+        pf["other"],
+    )
     optc_total = optc_nt + optc_bare + optc_drive + optc_other
 
     def _pct(n: int) -> float:
         return (100.0 * n / optc_total) if optc_total else 0.0
 
-    print(
-        f"[optc-pathform] total={optc_total} nt-device={optc_nt} bare-basename={optc_bare} "
-        f"drive-letter={optc_drive} other={optc_other}",
-        flush=True,
-    )
-
-    # OpTC pull provenance: which host-group/day dumps were pulled across run6 + run7.
     pull_records = []
     if PULL_PROGRESS.exists():
         try:
@@ -261,34 +172,33 @@ def main() -> int:
         except Exception:
             pull_records = []
 
-    rh = run_hash(set_attack | set_benign)
-    manifest = build_manifest(
-        recommended_precision_floor=max(200, int(0.10 * len(benign_events))),
-        zircolite_version=ZIRCOLITE_VERSION,
-        ruleset_path=str(Path(COMPILED_RULESET).relative_to(REPO)),
-        ruleset_sha=_sha256_file(COMPILED_RULESET),
-        loaded_rule_count=len(loaded),
-        level=LEVELS,
-        mapping_path=str(Path(COMISET_MAPPING).relative_to(REPO)),
-        mapping_hash=_sha256_file(COMISET_MAPPING),
-        precision_floor=MIN_EVENTS,
-        benign_corpus=(
+    attack_gate = next(g for g in res.acceptance_gate if g.corpus == "attack")
+    benign_gate = next(g for g in res.acceptance_gate if g.corpus == "benign")
+
+    # --- Merge the run7-specific provenance onto the pipeline's generic manifest body.
+    # Path keys are rewritten to repo-relative form (the committed manifest's shape).
+    recommended_floor = res.manifest["recommended_precision_floor"]
+    manifest = {
+        **res.manifest,
+        "ruleset_path": str(Path(COMPILED_RULESET).relative_to(REPO)),
+        "mapping_path": str(Path(COMISET_MAPPING).relative_to(REPO)),
+        "benign_corpus_path": str(Path(BENIGN_SAMPLE).relative_to(REPO)),
+        "recall_technique_map": str(TECHNIQUE_MAP.relative_to(REPO)),
+        "level": list(LEVELS),
+        "zircolite_version": ZIRCOLITE_VERSION,
+        "recall_method": "per-sub-technique (FIX B3, unchanged)",
+        "benign_corpus": (
             "run7: combined (COMISET real slice + NextronSystems/evtx-baseline) "
             "+ DARPA OpTC benign week, PARTIAL pull (run6: AIA-201-225 + run7: AIA-101-125; "
             "1 of 5 intended run7 host groups — gdown failed on the rest; "
             "FiveDirections/OpTC-data, Distribution A)"
         ),
-        benign_corpus_path=str(Path(BENIGN_SAMPLE).relative_to(REPO)),
-        benign_corpus_sha=_sha256_file(BENIGN_SAMPLE),
-        benign_eid1_total=len(benign_events),
-        benign_eid1_baseline_run5=base_eid1,
-        benign_eid1_optc_added=optc_total_eid1,
-        benign_eid1_optc_run6=RUN6_OPTC_EID1,
-        benign_eid1_optc_run7_new=optc_run7_added,
-        benign_label_split={"benign": n_ben, "malicious": n_mal},
-        # OpTC slice provenance: run6's single slice PLUS the run7 enlargement dumps.
-        # Each run7 dump is one host-group/day ecar-last.json.gz pulled+converted+deleted.
-        optc_slice_provenance={
+        "benign_eid1_baseline_run5": base_eid1,
+        "benign_eid1_optc_added": optc_total_eid1,
+        "benign_eid1_optc_run6": RUN6_OPTC_EID1,
+        "benign_eid1_optc_run7_new": optc_run7_added,
+        "attack_corpus": "splunk/attack_data (sub-technique-foldered, Apache-2.0) — UNCHANGED from run5 (FIX B3)",
+        "optc_slice_provenance": {
             "run6_slice": {
                 "source_file": "AIA-201-225.ecar-last.json.gz",
                 "day_folder": "18-19Sep19",
@@ -305,8 +215,7 @@ def main() -> int:
                 "run7 dumps identity-deduped by sigmaforge_eid against the existing corpus"
             ),
         },
-        # Image path-form split on the FULL OpTC slice (BLOCKER B1).
-        optc_image_pathform={
+        "optc_image_pathform": {
             "total": optc_total,
             "nt_device_form": optc_nt,
             "bare_basename": optc_bare,
@@ -316,23 +225,11 @@ def main() -> int:
                 "Image|endswith selectors miss the bare-basename share; drive-letter selectors match 0 OpTC events"
             ),
         },
-        attack_corpus="splunk/attack_data (sub-technique-foldered, Apache-2.0) — UNCHANGED from run5 (FIX B3)",
-        attack_process_creation_events=n_pc,
-        recall_method="per-sub-technique (FIX B3, unchanged)",
-        recall_technique_map=str(TECHNIQUE_MAP.relative_to(REPO)),
-        recall_technique_map_sha=_sha256_file(TECHNIQUE_MAP),
-        rules_with_technique_tag=n_tagged,
-        rules_recall_measurable=n_measurable,
-        rules_recall_unmeasured=n_unmeasured,
-        rules_precision_measurable=n_prec_measurable,
-        attack_fires=len(set_attack),
-        benign_fires=len(set_benign),
-        positive_control_fired=pc_fired,
-        run_hash=rh,
-    )
+    }
+    manifest = dict(sorted(manifest.items()))
+
     MANIFEST_OUT.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_OUT.write_text(json.dumps(manifest, indent=2, sort_keys=True))
-    print(f"[manifest] -> {MANIFEST_OUT}", flush=True)
 
     header = (
         "# Sigmaforge backtest — run7 (PRECISION corpus enlarged with one more DARPA OpTC host group)\n\n"
@@ -377,13 +274,13 @@ def main() -> int:
         f"- precision corpus: run5 baseline **{base_eid1}** -> run6 **{base_eid1 + RUN6_OPTC_EID1}** "
         f"-> run7 **{aug_eid1}** EID-1 (run7 added **+{optc_run7_added}** OpTC benign-by-construction "
         "events over run6).\n"
-        f"- precision-measurable rules: **{n_prec_measurable}** / {len(loaded)} loaded "
+        f"- precision-measurable rules: **{n_prec_measurable}** / {loaded_count} loaded "
         "(cleared the precision floor on the enlarged corpus).\n"
         f"- precision floor: the manifest's `recommended_precision_floor` is "
-        f"**{manifest['recommended_precision_floor']}** (10% of the {len(benign_events)}-event "
+        f"**{recommended_floor}** (10% of the {n_ben_total}-event "
         f"corpus); the per-rule table below uses the generic **{MIN_EVENTS}**-event floor, so "
-        f'"{n_prec_measurable}/{len(loaded)} precision-measurable" against 1000 should NOT be '
-        f"read as stronger than it is — at the recommended {manifest['recommended_precision_floor']}"
+        f'"{n_prec_measurable}/{loaded_count} precision-measurable" against 1000 should NOT be '
+        f"read as stronger than it is — at the recommended {recommended_floor}"
         "-event floor far fewer rules would clear it.\n\n"
         "### Honest delta — diminishing return\n\n"
         f"Enlarging the benign corpus from **{base_eid1 + RUN6_OPTC_EID1}** (run6) to **{aug_eid1}** "
@@ -407,23 +304,26 @@ def main() -> int:
         f"{len(benign_gate.dropped_titles)} | {'PASS' if benign_gate.ok else 'FAIL'} |\n\n"
         "---\n\n"
     )
-    report_md = header + report_md
+    report_md = header + res.report_md
 
     REPORT_OUT.parent.mkdir(parents=True, exist_ok=True)
     REPORT_OUT.write_text(report_md)
-    print(f"[report] -> {REPORT_OUT}", flush=True)
 
+    res.report_md = report_md
+    res.manifest = manifest
+    return res
+
+
+def main() -> int:
+    res = run()
     summary = {
-        "loaded_rules": len(loaded),
-        "benign_eid1_baseline_run5": base_eid1,
-        "benign_eid1_optc_augmented": aug_eid1,
-        "benign_eid1_optc_added": aug_eid1 - base_eid1,
-        "rules_precision_measurable": n_prec_measurable,
-        "recall_measurable": n_measurable,
-        "attack_fires_distinct": len(set_attack),
-        "benign_fires_distinct": len(set_benign),
-        "positive_control_fired": pc_fired,
-        "run_hash": rh,
+        "loaded_rules": res.loaded_rule_count,
+        "rules_precision_measurable": res.rules_precision_measurable,
+        "recall_measurable": res.rules_recall_measurable,
+        "attack_fires_distinct": res.manifest["attack_fires"],
+        "benign_fires_distinct": res.manifest["benign_fires"],
+        "positive_control_fired": res.manifest["positive_control_fired"],
+        "run_hash": res.run_hash,
     }
     Path("/tmp/_run7_summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))

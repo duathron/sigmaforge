@@ -606,10 +606,11 @@ wheels = [
 
 [[package]]
 name = "sigmaforge"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "shipwright-kit" },
     { name = "typer" },
@@ -619,7 +620,6 @@ dependencies = [
 backtest = [
     { name = "evtx" },
     { name = "gdown" },
-    { name = "pyyaml" },
 ]
 dev = [
     { name = "hypothesis" },
@@ -631,6 +631,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2.7.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.7.0" },
     { name = "shipwright-kit", specifier = ">=0.8.0" },
     { name = "typer", specifier = ">=0.12.0" },
@@ -640,7 +641,6 @@ requires-dist = [
 backtest = [
     { name = "evtx", specifier = ">=0.6.2" },
     { name = "gdown", specifier = ">=5.2" },
-    { name = "pyyaml", specifier = ">=6.0" },
 ]
 dev = [
     { name = "hypothesis", specifier = ">=6.0" },
