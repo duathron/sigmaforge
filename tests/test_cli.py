@@ -138,3 +138,20 @@ def test_hunt_clean_run_hits_only_unmeasured(tmp_path, monkeypatch):
     # the planted powershell event fired the fixture rule
     fired = {h["rule_id"] for h in data["hits"]}
     assert "Smoke PowerShell" in fired
+
+
+def test_manual_command_renders_bundled_doc():
+    # `sigmaforge manual` renders the bundled MANUAL.md (no engine/corpora needed).
+    res = CliRunner().invoke(app, ["manual"], env={"COLUMNS": "200"})
+    assert res.exit_code == 0, res.output
+    out = _clean(res.output)
+    assert "two-verb" in out.lower()
+    assert "hunt" in out and "backtest" in out
+    assert "Exit codes" in out
+
+
+def test_manual_is_packaged_data():
+    # the manual must ship as package data so `sigmaforge manual` works after pip install
+    from importlib.resources import files
+
+    assert files("sigmaforge").joinpath("MANUAL.md").is_file()

@@ -34,6 +34,9 @@ backtest = ["evtx>=0.6.2", "gdown>=5.2"]
 [tool.setuptools.packages.find]
 include = ["sigmaforge*"]
 
+[tool.setuptools.package-data]
+sigmaforge = ["MANUAL.md"]
+
 [tool.ruff]
 extend = "tooling/ruff-base.toml"
 

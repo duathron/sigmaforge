@@ -20,6 +20,17 @@ app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__
 console = Console()
 
 
+@app.command()
+def manual() -> None:
+    """Show the sigmaforge manual (bundled CLI reference)."""
+    from importlib.resources import files
+
+    from rich.markdown import Markdown
+
+    text = files("sigmaforge").joinpath("MANUAL.md").read_text(encoding="utf-8")
+    console.print(Markdown(text))
+
+
 def _resolve_engine_home(engine_home: Optional[str]) -> Optional[Path]:
     """Locate the vendored Zircolite engine and return the root containing
     ``Zircolite/zircolite.py``, or None if unresolvable.
