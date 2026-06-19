@@ -21,7 +21,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -50,10 +50,6 @@ class PipelineConfig:
     evtx_cfg: str  # Zircolite EVTX field-mapping config
     min_events: int = 1000
     source: str = "COMISET"
-    # Run-specific provenance passed as DATA (e.g. recommended-floor inputs); the
-    # pipeline does NOT interpret run-specific prose. Merged into the manifest body
-    # by the caller, not here.
-    report_extras: dict = field(default_factory=dict)
 
 
 @dataclass

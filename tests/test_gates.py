@@ -1,6 +1,7 @@
 from sigmaforge.records import RuleScore
 from sigmaforge.score.gates import (
     REASON_BELOW_FLOOR,
+    REASON_NO_BENIGN_EXEMPLARS,
     overfit_flag,
     positive_control_ok,
     precision_or_unmeasured,
@@ -16,6 +17,15 @@ def test_precision_reason_below_floor():
 def test_precision_reason_none_above_floor():
     s = RuleScore("r", tp=10, fp=1, tn=2000, fn=0, events_evaluated=2011)
     assert precision_reason(s, min_events=1000) is None
+
+
+def test_precision_reason_no_benign_exemplars_above_floor():
+    # Above the floor but the rule never fired (tp+fp == 0): precision is
+    # "unmeasured" with a ZERO denominator, NOT below-floor. Every unmeasured
+    # precision cell must carry a reason -> the zero-denom case names itself.
+    s = RuleScore("r", tp=0, fp=0, tn=2000, fn=0, events_evaluated=2000)
+    assert precision_or_unmeasured(s, min_events=1000) == "unmeasured"
+    assert precision_reason(s, min_events=1000) == REASON_NO_BENIGN_EXEMPLARS
 
 
 def test_precision_unmeasured_below_floor():

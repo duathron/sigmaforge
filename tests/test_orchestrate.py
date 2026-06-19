@@ -255,9 +255,11 @@ def test_recall_mode_per_technique_when_inputs_present():
         technique_event_counts={"T1059.001": 100},
     )
     assert funnel["recall_mode"] == "per-technique"
-    # measured row -> no recall_reason; 5000 benign events clear the floor -> no precision_reason
+    # measured row -> no recall_reason. The rule never fired on the benign corpus
+    # (benign_fires empty) yet the 5000 events clear the floor: precision is unmeasured
+    # with a ZERO denominator, so its reason is no-benign-exemplars (not below-floor).
     assert rows[0]["recall_reason"] is None
-    assert rows[0]["precision_reason"] is None
+    assert rows[0]["precision_reason"] == "no-benign-exemplars"
 
 
 def test_recall_mode_pooled_when_inputs_absent():

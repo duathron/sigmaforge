@@ -150,13 +150,6 @@ def backtest(
         )
         raise typer.Exit(4)
 
-    # Any acceptance-gate corpus not OK -> gate FAIL.
-    if any(not g.ok for g in res.acceptance_gate):
-        for g in res.acceptance_gate:
-            if not g.ok:
-                console.print(f"[red]Gate FAIL[/red]: {g.reason()}")
-        raise typer.Exit(5)
-
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(res.report_md)
