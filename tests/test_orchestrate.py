@@ -236,3 +236,100 @@ def test_pooled_fallback_when_technique_inputs_absent():
     r = rows[0]
     assert r["recall"] == 3 / 1533  # pooled
     assert r["recall_measurable"] is None
+
+
+# --- C2 Task 2.3: reason-codes threaded onto rows + recall_mode on funnel ------
+
+
+def test_recall_mode_per_technique_when_inputs_present():
+    attack = {MatchRecord("PowerShell Enc", "e0", "malicious")}
+    rows, funnel, _ = run_backtest(
+        [TAGGED_RULE],
+        attack,
+        set(),
+        _benign_events(),
+        n_attack_events=100,
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique={"e0": "T1059.001"},
+        technique_event_counts={"T1059.001": 100},
+    )
+    assert funnel["recall_mode"] == "per-technique"
+    # measured row -> no recall_reason; 5000 benign events clear the floor -> no precision_reason
+    assert rows[0]["recall_reason"] is None
+    assert rows[0]["precision_reason"] is None
+
+
+def test_recall_mode_pooled_when_inputs_absent():
+    rows, funnel, _ = run_backtest(
+        [TAGGED_RULE],
+        set(),
+        set(),
+        _benign_events(),
+        n_attack_events=100,
+        positive_control_fired=True,
+        min_events=1000,
+    )
+    assert funnel["recall_mode"] == "pooled"
+    # pooled mode: recall is not per-technique-measured -> no reason-code threaded
+    assert rows[0]["recall_reason"] is None
+
+
+def test_recall_reason_no_tag_threaded_onto_row():
+    rows, _, _ = run_backtest(
+        [UNTAGGED_RULE],
+        set(),
+        set(),
+        _benign_events(),
+        n_attack_events=100,
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique={"e0": "T1059"},
+        technique_event_counts={"T1059": 100},
+    )
+    assert rows[0]["recall_reason"] == "no-tag"
+
+
+def test_recall_reason_technique_zero_events_threaded_onto_row():
+    rows, _, _ = run_backtest(
+        [OTHER_TECH_RULE],
+        set(),
+        set(),
+        _benign_events(),
+        n_attack_events=100,
+        positive_control_fired=True,
+        min_events=1000,
+        event_technique={"e0": "T1059"},
+        technique_event_counts={"T1059": 100},  # no T1490 -> denom 0
+    )
+    assert rows[0]["recall_reason"] == "technique-0-events"
+
+
+def test_precision_reason_none_above_floor():
+    # benign-labelled events carry the selection field, enough to clear the floor
+    benign_events = [{"Image": "x", "sigmaforge_label": "benign"} for _ in range(2000)]
+    rows, _, _ = run_backtest(
+        [RULE],
+        set(),
+        {MatchRecord("PowerShell Enc", "b0", "benign")},
+        benign_events,
+        n_attack_events=1,
+        positive_control_fired=True,
+        min_events=1000,
+    )
+    assert rows[0]["precision_reason"] is None
+
+
+def test_precision_reason_below_floor_threaded_onto_row():
+    # only 10 benign events carry the selection field -> below the 1000 floor
+    benign_events = [{"Image": "x", "sigmaforge_label": "benign"} for _ in range(10)]
+    rows, _, _ = run_backtest(
+        [RULE],
+        set(),
+        set(),
+        benign_events,
+        n_attack_events=1,
+        positive_control_fired=True,
+        min_events=1000,
+    )
+    assert rows[0]["precision_reason"] == "below-floor"
