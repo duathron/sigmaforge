@@ -47,7 +47,7 @@ gates + `report.md` + `manifest.json` (run7-equivalent).
   → `pipeline.run_backtest_pipeline(cfg)` → write report + manifest.
 - **Never silently pooled-recall:** if per-technique inputs are absent, refuse (exit 4)
   rather than fall back to pooled. Add a **net-new** `recall_mode` manifest field
-  (`per-technique` | `pooled` | `refused`) — it does NOT exist today; set it in the
+  (`per-technique` | `pooled`) — it does NOT exist today; set it in the
   pipeline and pass it through `build_manifest` (which is pure-kwargs, so this is a new
   key, not a preserved one). The silent pooled fallback lives in `orchestrate.run_backtest`
   (the `n_attack_events` branch) and must be gated, not relied on.
@@ -62,7 +62,9 @@ gates + `report.md` + `manifest.json` (run7-equivalent).
 ## Architecture
 
 ### `sigmaforge/pipeline.py` (new) — the extracted, reusable pipeline
-`run_backtest_pipeline(cfg: BacktestConfig) -> BacktestResult` lifting the glue from
+`run_backtest_pipeline(cfg: PipelineConfig) -> BacktestResult` (NOTE: `PipelineConfig`
+is the pipeline's resolved input dataclass — distinct from the user-facing
+`config.BacktestConfig` YAML block; the CLI resolves the latter into the former) lifting the glue from
 `scripts/run7_backtest.py::main` (compile → recall pass → precision pass →
 `orchestrate.run_backtest` → render report + manifest). The hardcoded module constants
 (corpus paths, technique map, floor, run-specific provenance) become `cfg` fields.
