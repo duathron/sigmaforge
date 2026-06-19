@@ -3,6 +3,33 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [0.3.0](https://github.com/duathron/sigmaforge/compare/v0.2.0...v0.3.0) (2026-06-19)
+
+
+### Features
+
+* **cli:** bundled manual + `sigmaforge manual` command ([3dae402](https://github.com/duathron/sigmaforge/commit/3dae402ed623e6f3c696d7ab3ddc67f223d0cd73))
+* **cli:** hunt command (rules x arbitrary logs -&gt; hits only, unmeasured) ([e83dcf6](https://github.com/duathron/sigmaforge/commit/e83dcf600760fb424e88b550ba5ed48e1be757c5))
+* **cli:** real backtest command (config+pipeline, preflight exit codes); drop classify ([b15679b](https://github.com/duathron/sigmaforge/commit/b15679b0b4d55f76f682cbab656e64f4f4a2e693))
+* **config:** add backtest block (corpus/mapping/floor, None defaults) ([5b7d515](https://github.com/duathron/sigmaforge/commit/5b7d5154a56463234662aa111f12bd70f9229e52))
+* **orchestrate:** row reason-codes + recall_mode ([2f4919e](https://github.com/duathron/sigmaforge/commit/2f4919ef6cc348c7213c83c7d2c1d8988026c85e))
+* **render:** inline unmeasured reasons + data-generated caveats ([6b089f5](https://github.com/duathron/sigmaforge/commit/6b089f50920556eeb9c82122d95ebec354a3a63e))
+* **score:** net-new unmeasured reason-codes (no-tag/technique-0-events/below-floor) ([358f29b](https://github.com/duathron/sigmaforge/commit/358f29bd083b13530b4195285114f5b9344a6bcb))
+
+
+### Bug Fixes
+
+* **deps:** declare pyyaml as a runtime dependency (shipped config import; was ModuleNotFoundError on clean install) ([5db6f4c](https://github.com/duathron/sigmaforge/commit/5db6f4c4f92e9780a452bffe4ca8a44171416417))
+
+
+### Documentation
+
+* **plan:** sigmaforge CLI implementation plan (C1 extract+pyyaml -&gt; C2 backtest -&gt; C3 hunt) ([5a3a923](https://github.com/duathron/sigmaforge/commit/5a3a92377fea69977d33a7607a143df18861e89a))
+* **plan:** Skeptic-gate fixes — funnel.recall_mode (no tuple-arity change), surface computed provenance on BacktestResult, hunt temp-ruleset write, drop refused enum ([906cfd1](https://github.com/duathron/sigmaforge/commit/906cfd1e52ca3aefd7c964c6e0be800f88a6cc24))
+* **readme:** CLI is the real path now (backtest + hunt, same pipeline); test count 113 ([29300cc](https://github.com/duathron/sigmaforge/commit/29300cc586b62f919e6ba70b713e32b8f1a2229b))
+* **run7:** regenerate report with no-benign-exemplars reason annotations (render drift from C3 cleanup) ([8a94a53](https://github.com/duathron/sigmaforge/commit/8a94a535be94748368d5d0656b7bdd837a31ed83))
+* **spec:** functional CLI design (hunt + backtest), MeetUp-approved + Skeptic-gated ([e5bded9](https://github.com/duathron/sigmaforge/commit/e5bded9dc3d64d97f549e3f47126f18eeac2adc2))
+
 ## [0.2.0](https://github.com/duathron/sigmaforge/compare/v0.1.0...v0.2.0) (2026-06-18)
 
 
