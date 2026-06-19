@@ -163,6 +163,102 @@ def backtest(
     )
 
 
+_HUNT_BANNER = "hits only — NOT a quality measurement (logs are unlabeled)"
+_HUNT_UNMEASURED = "unmeasured — unlabeled corpus"
+
+
+def _is_evtx_logs(logs: Path) -> bool:
+    """Detect whether `logs` is EVTX (-> xml/evtx input) or JSON.
+
+    EVTX when the path (or, for a dir, any file under it) is a .evtx/.xml file;
+    otherwise JSON (.json/.jsonl). A dir wins on its first EVTX file."""
+    suffixes = {".evtx", ".xml"}
+    if logs.is_dir():
+        return any(p.suffix.lower() in suffixes for p in logs.rglob("*") if p.is_file())
+    return logs.suffix.lower() in suffixes
+
+
+@app.command()
+def hunt(
+    rules: str = typer.Option(..., help="Source Sigma rules (.yml file OR dir)."),
+    logs: str = typer.Option(..., help="Logs to hunt over (EVTX/XML or JSON, file OR dir)."),
+    out: str = typer.Option("hits.json", help="Hits output path."),
+    config: Optional[str] = typer.Option(None, help="Path to a sigmaforge config YAML (engine override)."),
+) -> None:
+    """Run Sigma rules against ARBITRARY (unlabeled) logs and report HITS ONLY.
+
+    The pip-only path: needs the vendored engine but NO labeled corpora. Because the
+    logs are unlabeled, precision/recall are structurally UNMEASURED — the output is a
+    hit list, NOT a quality measurement. For measured recall/precision use
+    `sigmaforge backtest` against labeled corpora.
+    """
+    import json
+    import tempfile
+    from collections import Counter
+
+    from sigmaforge.config import load as load_config
+    from sigmaforge.ingest.compile import compile_ruleset
+    from sigmaforge.ingest.zircolite_runner import run_shard
+
+    cfg = load_config(Path(config) if config else None)
+
+    # --- Preflight: engine resolvable? (no corpora required — this is the pip path) ---
+    engine_root = _resolve_engine_home(cfg.backtest.engine_home)
+    if engine_root is None:
+        console.print(
+            "[red]Detection engine not found[/red] — `hunt` needs the vendored Zircolite "
+            "engine (Zircolite/zircolite.py) which is not bundled in the pip package."
+        )
+        console.print(
+            "Fetch + install it with [bold]`bash scripts/setup_engine.sh`[/bold] (run from the repo "
+            "root), or point --engine-home / SIGMAFORGE_HOME at the engine root."
+        )
+        raise typer.Exit(3)
+
+    rules_path = Path(rules)
+    rule_files = sorted(rules_path.rglob("*.yml")) if rules_path.is_dir() else [rules_path]
+
+    # compile_ruleset returns an IN-MEMORY list[dict]; run_shard needs a ruleset FILE.
+    compiled, _n_staged = compile_ruleset(rule_files)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(compiled, fh)
+        ruleset_path = fh.name
+
+    # Engine field-mapping config: the `--config` file's `backtest.comiset_mapping`
+    # override (e.g. a COMISET _source->Sigma map for ES-shaped JSON), else the
+    # engine's own bundled field-mapping config so the engine always has one.
+    mapping_path = cfg.backtest.comiset_mapping or str(engine_root / "Zircolite" / "config" / "fieldMappings.yaml")
+
+    logs_path = Path(logs)
+    evtx = _is_evtx_logs(logs_path)
+    matches = run_shard(
+        str(logs_path),
+        ruleset_path,
+        mapping_path=mapping_path,
+        json_input=not evtx,
+        xml_input=evtx,
+    )
+
+    counts = Counter((m.rule_id, m.event_id) for m in matches)
+    hits = [{"rule_id": rid, "event_id": eid, "count": n} for (rid, eid), n in sorted(counts.items())]
+
+    result = {
+        "banner": _HUNT_BANNER,
+        "precision": _HUNT_UNMEASURED,
+        "recall": _HUNT_UNMEASURED,
+        "rules_compiled": len(compiled),
+        "hit_count": len(hits),
+        "hits": hits,
+    }
+    out_path = Path(out)
+    if out_path.parent != Path(""):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+
+    console.print(f"[yellow]{_HUNT_BANNER}[/yellow]")
+    console.print(f"hits written: {out_path} ({len(hits)} hit(s), {len(compiled)} rule(s) compiled)")
+
+
 def main() -> None:
     app()
 
