@@ -16,8 +16,26 @@ class OutputConfig(BaseModel):
     default_format: str = "rich"
 
 
+class BacktestConfig(BaseModel):
+    """Resolved corpus/mapping/engine inputs for the `backtest` command.
+
+    Defaults are ``None`` (NOT repo-relative paths): a fresh ``pip install`` ships
+    no labeled corpora, so the CLI raises a teaching error when these are unset
+    outside the repo rather than silently pointing at a non-existent ``data/`` tree.
+    """
+
+    rules: Optional[str] = None
+    attack_corpus: Optional[str] = None
+    technique_map: Optional[str] = None
+    benign_sample: Optional[str] = None
+    comiset_mapping: Optional[str] = None
+    engine_home: Optional[str] = None
+    floor: int = 1000
+
+
 class AppConfig(BaseModel):
     output: OutputConfig = OutputConfig()
+    backtest: BacktestConfig = BacktestConfig()
 
 
 def _load_yaml(path: Path) -> dict:

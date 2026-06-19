@@ -1,3 +1,11 @@
+def _with_reason(value, reason: str | None):
+    """C2: append the reason-code inline when a cell is unmeasured, e.g.
+    ``unmeasured (technique-0-events)``. A measured (numeric) value is unchanged."""
+    if value == "unmeasured" and reason:
+        return f"unmeasured ({reason})"
+    return value
+
+
 def render_report(
     rows: list[dict],
     funnel: dict,
@@ -7,11 +15,15 @@ def render_report(
     run_hash: str | None = None,
     corpus_note: str | None = None,
     recall_note: str | None = None,
+    caveats: dict | None = None,
 ) -> str:
     """A10/A8: the deliverable. A human-readable FP-tuning report.
     Leads with the corpus-scope + noisy-label caveat; precision labelled precision@SOURCE.
     `corpus_note` MUST disclose the benign corpus composition when it is blended (A8 honesty).
-    `recall_note` (FIX B) discloses how recall is measured (per-technique vs pooled)."""
+    `recall_note` (FIX B) discloses how recall is measured (per-technique vs pooled).
+    `caveats` (C2) is a DATA dict (floor, recommended_floor, corpus path-form split, ...)
+    rendered into a Caveats block — run-specific provenance is passed as data, not as a
+    hardcoded prose string lifted from a script header."""
     lines = [
         f"# Sigmaforge backtest report ({source})",
         "",
@@ -54,8 +66,11 @@ def render_report(
             signal = "NONE (no-benign-exemplars)"
         else:
             signal = "real"
+        # C2: when a cell is unmeasured, render its reason-code inline (never a bare token)
+        recall_cell = _with_reason(r.get("recall"), r.get("recall_reason"))
+        prec_cell = _with_reason(prec, r.get("precision_reason"))
         lines.append(
-            f"| {r.get('rule')} | {r.get('recall')} | {prec} "
+            f"| {r.get('rule')} | {recall_cell} | {prec_cell} "
             f"| {r.get('tp')} | {r.get('fp')} | {r.get('events_evaluated')} "
             f"| {r.get('benign_events_evaluated', 'n/a')} | {signal} |"
         )
@@ -84,4 +99,22 @@ def render_report(
             )
     else:
         lines.append("- none (every measured rule had at least one benign exemplar)")
+
+    # C2: data-generated caveats block (floor, recommended floor, corpus path-form split,
+    # ...). Generated from the passed dict so the CLI path emits the same honesty discipline
+    # run7's script header used to hardcode — run-specific provenance flows as DATA, not prose.
+    if caveats:
+        lines += ["", "## Caveats"]
+        if "floor" in caveats:
+            lines.append(f"- Precision floor in effect: **{caveats['floor']}** evaluated events.")
+        if "recommended_floor" in caveats:
+            lines.append(
+                f"- Recommended floor for a stable precision estimate: **{caveats['recommended_floor']}** events."
+            )
+        if caveats.get("path_form_split"):
+            lines.append(f"- Corpus path-form note: {caveats['path_form_split']}")
+        # render any further provenance keys generically (data, not hardcoded prose)
+        for k, v in caveats.items():
+            if k not in ("floor", "recommended_floor", "path_form_split"):
+                lines.append(f"- {k}: {v}")
     return "\n".join(lines)

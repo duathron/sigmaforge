@@ -23,7 +23,13 @@ from sigmaforge.score.coverage import (
     events_evaluated_for_rule,
     selection_fields,
 )
-from sigmaforge.score.recall import UNMEASURED, per_technique_recall, rule_techniques
+from sigmaforge.score.gates import precision_reason
+from sigmaforge.score.recall import (
+    UNMEASURED,
+    per_technique_recall,
+    per_technique_recall_reason,
+    rule_techniques,
+)
 from sigmaforge.score.scorer import emit_precision
 
 
@@ -76,11 +82,14 @@ def run_backtest(
                 "recall_numer": numer,
                 "recall_denom": denom,
                 "recall_measurable": recall != UNMEASURED,
+                # C2: reason-code naming WHY this rule is unmeasured (None when measured)
+                "recall_reason": per_technique_recall_reason(techs, technique_event_counts),
             }
         else:
             # legacy POOLED recall (fallback when per-technique inputs absent)
             recall_by_rule[rid] = (len(fired_eids) / n_attack_events) if n_attack_events else 0.0
-            recall_meta_by_rule[rid] = {"recall_measurable": None}
+            # pooled recall is not per-technique-measured -> no per-technique reason-code
+            recall_meta_by_rule[rid] = {"recall_measurable": None, "recall_reason": None}
 
     precisions = emit_precision(scores, positive_control_fired, min_events)  # the ONLY precision path
     rows = []
@@ -106,6 +115,10 @@ def run_backtest(
                 "recall_numer": meta.get("recall_numer"),
                 "recall_denom": meta.get("recall_denom"),
                 "recall_measurable": meta.get("recall_measurable"),
+                # C2 reason-codes: None when measured, the code (no-tag / technique-0-events /
+                # below-floor) when unmeasured — net-new, threaded for the render + manifest.
+                "recall_reason": meta.get("recall_reason"),
+                "precision_reason": precision_reason(s, min_events),
             }
         )
     funnel = {
@@ -114,6 +127,9 @@ def run_backtest(
         "stateless": len(loaded_rules),
         "fires": len({s.rule_id for s in scores if s.tp or s.fp}),
         "survives_fp": len([s for s in scores if s.fp == 0 and s.tp]),
+        # C2: carry the recall mode on the funnel (NOT a 4th return value — the 3-tuple
+        # arity is unpacked at 18 sites). The CLI refuses a `pooled` backtest (exit 4).
+        "recall_mode": "per-technique" if per_technique else "pooled",
     }
     # FIX H acceptance gate (reconcile-not-relabel): with a ONE-source ruleset
     # (engine compiled from exactly the loaded set), every engine fire must be a
