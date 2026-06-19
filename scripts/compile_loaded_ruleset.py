@@ -37,10 +37,7 @@ silent loss).
 from __future__ import annotations
 
 import json
-import logging
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -49,6 +46,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "Zircolite"))
 
+from sigmaforge.ingest.compile import compile_ruleset  # noqa: E402
 from sigmaforge.ingest.ruleload import partition_rules  # noqa: E402
 
 PC_GLOB = "sigma/rules/windows/process_creation/*.yml"
@@ -74,38 +72,6 @@ def loaded_rule_paths() -> tuple[list[Path], list[dict]]:
     loaded_ids = {id(d) for d in loaded}
     paths = sorted({p for p, d in docs_with_path if id(d) in loaded_ids})
     return paths, loaded
-
-
-def compile_ruleset(paths: list[Path]) -> tuple[list[dict], int]:
-    """Convert exactly `paths` through Zircolite's pySigma sqlite backend.
-
-    Returns (converted_ruleset, n_staged). n_staged is how many .yml files were
-    handed to the converter; len(converted_ruleset) is how many compiled OK.
-    """
-    from zircolite.config import RulesetConfig
-    from zircolite.rules import RulesetHandler
-
-    logger = logging.getLogger("compile_loaded_ruleset")
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    with tempfile.TemporaryDirectory(prefix="sigmaforge_loaded_") as tmp:
-        stage = Path(tmp)
-        for p in paths:
-            # flat-stage with a unique name so rglob('*.yml') in the converter
-            # picks up exactly these and nothing else.
-            shutil.copy2(p, stage / p.name)
-        n_staged = len(list(stage.glob("*.yml")))
-
-        cfg = RulesetConfig(
-            ruleset=[str(stage)],
-            pipeline=[[PIPELINE]],
-            save_ruleset=False,
-        )
-        handler = RulesetHandler(ruleset_config=cfg, logger=logger)
-        # .rulesets IS the converted Zircolite-format list (same shape as
-        # rules_windows_sysmon.json). Deep-copy by re-serialising to be safe.
-        ruleset = json.loads(json.dumps(handler.rulesets))
-    return ruleset, n_staged
 
 
 def main() -> int:
