@@ -29,6 +29,7 @@ import yaml
 from sigmaforge.ingest.ruleload import partition_rules
 from sigmaforge.ingest.zircolite_runner import run_shard
 from sigmaforge.orchestrate import run_backtest
+from sigmaforge.provenance import provenance
 from sigmaforge.records import MatchRecord
 from sigmaforge.runmanifest import build_manifest, run_hash
 from sigmaforge.score.acceptance import GateResult, assert_one_source
@@ -205,6 +206,7 @@ def run_backtest_pipeline(cfg: PipelineConfig) -> BacktestResult:
         benign_fires=len(set_benign),
         positive_control_fired=pc_fired,
         run_hash=rh,
+        provenance=provenance(),
     )
 
     return BacktestResult(

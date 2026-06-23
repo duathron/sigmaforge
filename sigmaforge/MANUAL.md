@@ -146,6 +146,26 @@ combined samples with the `scripts/build_*` helpers, and run `sigmaforge backtes
 (or the `scripts/run*_backtest.py` runs, which call the **same** `sigmaforge.pipeline`).
 The committed `reports/run*.md` are inspectable without running anything.
 
+## Comparing runs across systems
+
+Two machines running the same rules + corpora should produce the same numbers — but
+the engine and its dependency closure can shift which events fire. So the manifest
+records the full provenance to make any difference attributable:
+
+- `run_hash` — a stable, worker-invariant hash of the fired (rule, event) set. Same
+  hash = identical result.
+- `ruleset_sha`, `mapping_hash`, `benign_corpus_sha`, `recall_technique_map_sha` —
+  verify both machines used the same inputs.
+- `provenance.zircolite_commit_sha` + `zircolite_tag` — the engine's exact source (the
+  version string alone is not enough).
+- `provenance.environment` — `python_version`, `platform`, `sqlite_version`, and the
+  `engine_deps` versions (pySigma + backend, orjson, lxml).
+
+If two `run_hash` values differ, diff the provenance blocks and the SHAs to find the
+axis — engine commit, a pySigma version, sqlite, the OS. This makes a mismatch
+diagnosable, not mysterious. It does **not** guarantee identical output: that requires
+pinning the whole environment (a container), which sigmaforge does not ship.
+
 ---
 *Honest measurement over flattering numbers. AI-pair-programmed; designed, reviewed, and
 gated by Christian Huhn.*
