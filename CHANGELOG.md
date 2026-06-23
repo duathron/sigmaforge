@@ -3,6 +3,13 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [0.4.0](https://github.com/duathron/sigmaforge/compare/v0.3.0...v0.4.0) (2026-06-23)
+
+
+### Features
+
+* **provenance:** record engine commit SHA + environment in the manifest ([bcfb1e5](https://github.com/duathron/sigmaforge/commit/bcfb1e556f0c25a00ce3d648cf1ae0aa772fdbfe))
+
 ## [0.3.0](https://github.com/duathron/sigmaforge/compare/v0.2.0...v0.3.0) (2026-06-19)
 
 
