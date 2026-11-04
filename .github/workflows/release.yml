@@ -1,64 +1,107 @@
 name: Release
-# Inlined (NOT a reusable workflow): PyPI Trusted Publishing matches the OIDC
-# workflow_ref, and a reusable workflow's claims don't match a publisher configured
-# for this repo (invalid-publisher). Keeping the publish job here = workflow_ref is
-# duathron/sigmaforge/.github/workflows/release.yml -> matches the TP config
-# (workflow: release.yml, environment: pypi). Steps mirror the proven shipwright
-# python-release.yml. workflow_dispatch lets us publish an already-tagged version.
+# release.yml — copy of shipwright release.yml @ cf58506d6d8a83be6e6f25d6b7b88ae5489ac544; re-sync on update.
+# NOTE: a green workflow_dispatch run with `skip-existing: true` does NOT prove a fresh publish; check the PyPI file list afterwards.
+# NOTE: dispatch builds main HEAD; only dispatch when HEAD's pyproject version is the tagged release (use it to re-run a failed/partial publish).
+# release-please opens/merges the release PR and tags the version; on a freshly
+# created release this same workflow builds the distributions + SBOM in a `build`
+# job WITHOUT OIDC (contents: read only) and hands them to a `publish` job that
+# only downloads the built `dist` artifact and uploads to PyPI via an OIDC
+# Trusted Publisher (no long-lived token; no build tooling runs with id-token).
+# The publish job runs directly here (not via a reusable workflow) so the OIDC
+# workflow claim is unambiguously `release.yml` — match the PyPI Trusted
+# Publisher to this filename. Consumers copy this file and keep the filename
+# their Trusted Publisher names (`release.yml` / `publish.yml`).
+# `uv.lock` is required: the SBOM is exported with `uv export --locked`.
+# The `pypi` GitHub Environment gates the upload: add required reviewers to it so
+# a human approves each publish.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+# Least-privilege default; the release-please job below re-grants what it needs.
 permissions:
   contents: read
+
+# Queue overlapping runs for the same ref; never cancel a running publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release-please:
     name: Release PR / tag
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write # push the release commit + tag
+      pull-requests: write # open/update the release PR
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
     steps:
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071  # v4
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: rp
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  publish:
-    name: Build + publish to PyPI (OIDC)
+  build:
+    name: Build + SBOM (no OIDC)
     needs: release-please
-    # publish on a fresh release-please release, OR on a manual dispatch (to ship an
-    # already-tagged version, e.g. after fixing the trusted-publisher config).
     if: ${{ needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
-      id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: false
       - name: Build distributions
         run: uv build
+      - name: Upload distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+      # --locked fails on a missing/stale uv.lock instead of emitting a wrong SBOM.
+      - name: Export locked runtime requirements
+        run: uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file sbom-requirements.txt
       - name: Generate CycloneDX SBOM
-        run: uvx --from cyclonedx-bom cyclonedx-py environment --output-format JSON --output-file sbom.cdx.json
+        run: uvx --from cyclonedx-bom==7.5.0 cyclonedx-py requirements --pyproject pyproject.toml --mc-type library --output-format JSON --output-file sbom.cdx.json sbom-requirements.txt
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-cyclonedx
           path: sbom.cdx.json
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
+
+  publish:
+    name: Publish to PyPI (OIDC)
+    needs: [release-please, build]
+    if: ${{ needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC token for the Trusted Publisher
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          skip-existing: true
+          name: dist
+          path: dist/
+      - name: Sanity-check dist contents
+        # Catches stray/extra files in the downloaded artifact (only *.whl and
+        # *.tar.gz, at least one of each). Does NOT detect content tampering.
+        run: |
+          shopt -s nullglob
+          whl=(dist/*.whl); sdist=(dist/*.tar.gz); all=(dist/*)
+          [ ${#whl[@]} -ge 1 ] && [ ${#sdist[@]} -ge 1 ] && [ ${#all[@]} -eq $(( ${#whl[@]} + ${#sdist[@]} )) ] || { ls -la dist; echo "::error::unexpected dist contents"; exit 1; }
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
           attestations: true
+          skip-existing: true
