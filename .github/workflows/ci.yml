@@ -3,8 +3,11 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    uses: duathron/shipwright/.github/workflows/python-ci.yml@main
+    uses: duathron/shipwright/.github/workflows/python-ci.yml@b2631f151d481c7537ff4ef1ee3ed9de834c007e  # v0.12.0
     with:
       python-version: "3.11"
