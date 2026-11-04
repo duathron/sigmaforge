@@ -8,6 +8,6 @@ permissions:
 
 jobs:
   ci:
-    uses: duathron/shipwright/.github/workflows/python-ci.yml@b2631f151d481c7537ff4ef1ee3ed9de834c007e  # v0.12.0
+    uses: duathron/shipwright/.github/workflows/python-ci.yml@02c7e57c9c43e1eb76e08b11d4c1386d7f9b90ab # v0.12.1
     with:
       python-version: "3.11"

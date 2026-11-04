@@ -1,0 +1,42 @@
+version: 2
+updates:
+  # GitHub Actions — keep SHA-pinned actions current (security-relevant per G7).
+  # Minor/patch updates are grouped into one PR; majors stay individual PRs for review.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "ci"
+  # Python deps via the uv lockfile (uv is a GA dependabot ecosystem).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      dev-deps:
+        dependency-type: "development"
+      runtime-deps:
+        dependency-type: "production"
+    commit-message:
+      prefix: "build"
+  # pre-commit hook revisions (.pre-commit-config.yaml).
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "build"
