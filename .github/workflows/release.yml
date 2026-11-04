@@ -1,5 +1,7 @@
 name: Release
 # release.yml — copy of shipwright release.yml @ cf58506d6d8a83be6e6f25d6b7b88ae5489ac544; re-sync on update.
+# NOTE: a green workflow_dispatch run with `skip-existing: true` does NOT prove a fresh publish; check the PyPI file list afterwards.
+# NOTE: dispatch builds main HEAD; only dispatch when HEAD's pyproject version is the tagged release (use it to re-run a failed/partial publish).
 # release-please opens/merges the release PR and tags the version; on a freshly
 # created release this same workflow builds the distributions + SBOM in a `build`
 # job WITHOUT OIDC (contents: read only) and hands them to a `publish` job that
@@ -29,6 +31,7 @@ concurrency:
 jobs:
   release-please:
     name: Release PR / tag
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the release commit + tag
