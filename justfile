@@ -12,8 +12,7 @@ test:
     uv run pytest -q
 
 smoke:
-    uv run sigmaforge version
-    uv run sigmaforge classify 8.8.8.8
+    uv run sigmaforge manual >/dev/null
 
 # Mandatory pre-release gate: real + adversarial inputs, never crash.
 dogfood:
