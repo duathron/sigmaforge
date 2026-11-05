@@ -216,3 +216,248 @@ def test_gate_fail_strips_terminal_escapes(tmp_path, monkeypatch):
     res = _gate_fail_invoke(tmp_path, monkeypatch, "title \x1b]0;pwned\x07 \x1b[31mred")
     assert res.exit_code == 5
     assert "\x1b" not in res.output and "\x07" not in res.output
+
+
+# --- fix round: line forging, wrapping, hostile paths ------------------------------
+
+
+def test_gate_fail_message_cannot_forge_an_output_line(tmp_path, monkeypatch):
+    res = _gate_fail_invoke(tmp_path, monkeypatch, "bad\nVerdict: PASS all gates green\r\n\tTAB L2\x85L3")
+    assert res.exit_code == 5
+    lines = res.output.splitlines()
+    assert sum(ln.startswith("Acceptance gate FAILED") for ln in lines) == 1
+    assert not any(ln.startswith(("Verdict", "TAB", "L2", "L3")) for ln in lines)
+    assert "\t" not in res.output
+
+
+@pytest.mark.parametrize("n", range(1, 81))
+def test_gate_fail_wrapping_cannot_start_a_line_with_attacker_text(tmp_path, monkeypatch, n):
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text("")
+
+    def raiser(_cfg):
+        raise AssertionError("x" * n + " PASS all 6 gates OK")
+
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", raiser)
+    res = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--rules",
+            str(tmp_path),
+            "--attack-corpus",
+            str(tmp_path),
+            "--technique-map",
+            str(tmp_path / "tm.json"),
+            "--benign-sample",
+            str(tmp_path / "b.jsonl"),
+            "--engine-home",
+            str(eng),
+        ],
+        env={"COLUMNS": "80"},
+    )
+    assert res.exit_code == 5
+    assert not any(ln.lstrip().startswith("PASS") for ln in res.output.splitlines())
+
+
+HOSTILE = "[/x]\x1b]0;t\x07.md"
+
+
+def _assert_hostile_literal(res):
+    assert "MarkupError" not in repr(res.exception)
+    assert "\x1b" not in res.output and "\x07" not in res.output
+    assert "[/x]" in res.output
+
+
+def _fake_engine(tmp_path):
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text("")
+    return eng
+
+
+def test_backtest_written_paths_are_literal(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    eng = _fake_engine(tmp_path)
+    res_obj = SimpleNamespace(
+        funnel={},
+        report_md="# r",
+        manifest={},
+        loaded_rule_count=1,
+        rules_recall_measurable=1,
+        rules_precision_measurable=1,
+        run_hash="h",
+    )
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", lambda _c: res_obj)
+    res = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--rules",
+            str(tmp_path),
+            "--attack-corpus",
+            str(tmp_path),
+            "--technique-map",
+            str(tmp_path / "tm.json"),
+            "--benign-sample",
+            str(tmp_path / "b.jsonl"),
+            "--engine-home",
+            str(eng),
+            "--out",
+            str(tmp_path / "o" / HOSTILE),
+        ],
+        env={"COLUMNS": "300"},
+    )
+    assert res.exit_code == 0, res.output
+    _assert_hostile_literal(res)
+    assert "report written:" in res.output and "manifest written:" in res.output
+    assert res.output.count("[/x]") >= 2  # both the report and the manifest line
+
+
+def test_hunt_written_path_is_literal(tmp_path, monkeypatch):
+    eng = _fake_engine(tmp_path)
+    monkeypatch.setattr("sigmaforge.ingest.compile.compile_ruleset", lambda *a, **k: ([], 0))
+    monkeypatch.setattr("sigmaforge.ingest.zircolite_runner.run_shard", lambda *a, **k: [])
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    res = CliRunner().invoke(
+        app,
+        [
+            "hunt",
+            "--rules",
+            str(tmp_path),
+            "--logs",
+            str(logs),
+            "--engine-home",
+            str(eng),
+            "--out",
+            str(tmp_path / "o" / HOSTILE),
+        ],
+        env={"COLUMNS": "300"},
+    )
+    assert res.exit_code == 0, res.output
+    _assert_hostile_literal(res)
+    assert "hits written:" in res.output
+
+
+def test_engine_refused_message_is_literal(tmp_path, monkeypatch):
+    eng = _fake_engine(tmp_path)
+    from sigmaforge.engine import EngineNotFoundError
+
+    def boom(*a, **k):
+        raise EngineNotFoundError("foreign zircolite at " + HOSTILE)
+
+    monkeypatch.setattr("sigmaforge.ingest.compile.compile_ruleset", boom)
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    res = CliRunner().invoke(
+        app,
+        ["hunt", "--rules", str(tmp_path), "--logs", str(logs), "--engine-home", str(eng)],
+        env={"COLUMNS": "300"},
+    )
+    assert res.exit_code == 3, res.output
+    _assert_hostile_literal(res)
+
+
+@pytest.mark.parametrize("n", range(1, 81))
+def test_engine_refused_wrapping_cannot_start_a_line_with_attacker_text(tmp_path, monkeypatch, n):
+    eng = _fake_engine(tmp_path)
+    from sigmaforge.engine import EngineNotFoundError
+
+    def boom(*a, **k):
+        raise EngineNotFoundError("x" * n + " PASS all 6 gates OK")
+
+    monkeypatch.setattr("sigmaforge.ingest.compile.compile_ruleset", boom)
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    res = CliRunner().invoke(
+        app,
+        ["hunt", "--rules", str(tmp_path), "--logs", str(logs), "--engine-home", str(eng)],
+        env={"COLUMNS": "80"},
+    )
+    assert res.exit_code == 3
+    assert not any(ln.lstrip().startswith("PASS") for ln in res.output.splitlines())
+
+
+# --- engine output is captured, never streamed to the tty --------------------------
+
+_EVIL_OUT = "EVIL \\x1b]0;PWN\\x07\\x1b[41m [link=http://x]ml[/link]"
+
+
+def _noisy_engine(tmp_path, exit_code):
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text(
+        "import sys\n"
+        f"msg = '{_EVIL_OUT}'\n"
+        "sys.stdout.write(msg + '\\n')\n"
+        "sys.stderr.write('line1\\n' + msg + '\\n')\n"
+        "out = sys.argv[sys.argv.index('--outfile') + 1]\n"
+        "open(out, 'w').write('[]')\n"
+        f"sys.exit({exit_code})\n"
+    )
+    return eng
+
+
+def _hunt_noisy(tmp_path, monkeypatch, exit_code):
+    eng = _noisy_engine(tmp_path, exit_code)
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    monkeypatch.setattr("sigmaforge.ingest.compile.compile_ruleset", lambda *a, **k: ([], 0))
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    return CliRunner().invoke(
+        app,
+        [
+            "hunt",
+            "--rules",
+            str(tmp_path),
+            "--logs",
+            str(logs),
+            "--engine-home",
+            str(eng),
+            "--out",
+            str(tmp_path / "h.json"),
+        ],
+        env={"COLUMNS": "300"},
+    )
+
+
+def test_engine_output_is_not_streamed_on_success(tmp_path, monkeypatch, capfd):
+    res = _hunt_noisy(tmp_path, monkeypatch, 0)
+    assert res.exit_code == 0, res.output
+    seen = capfd.readouterr()
+    assert "\x1b" not in seen.out + seen.err + res.output
+    assert "EVIL" not in seen.out + seen.err + res.output
+
+
+def test_engine_failure_shows_sanitized_stderr_tail(tmp_path, monkeypatch, capfd):
+    res = _hunt_noisy(tmp_path, monkeypatch, 2)
+    assert res.exit_code == 1
+    seen = capfd.readouterr()
+    assert "\x1b" not in seen.out + seen.err + res.output and "\x07" not in res.output
+    assert "Detection engine failed" in res.output and "status 2" in res.output
+    assert "[link=http://x]ml[/link]" in res.output  # literal, not interpreted
+    assert "Traceback" not in res.output
+    assert not any(ln.startswith(("line1", "EVIL")) for ln in res.output.splitlines())
+
+
+def test_run_shard_captures_engine_output(tmp_path, monkeypatch):
+    import subprocess
+
+    from sigmaforge.ingest import zircolite_runner
+
+    eng = _fake_engine(tmp_path)
+    seen = {}
+
+    def spy(cmd, **kw):
+        seen.update(kw)
+        out = cmd[cmd.index("--outfile") + 1]
+        Path(out).write_text("[]")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(zircolite_runner.subprocess, "run", spy)
+    zircolite_runner.run_shard(str(tmp_path / "e.jsonl"), str(tmp_path / "r.json"), engine_home=str(eng))
+    assert seen["capture_output"] is True and seen["text"] is True
+    assert seen["errors"] == "replace" and seen["check"] is True

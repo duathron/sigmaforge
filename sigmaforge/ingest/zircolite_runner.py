@@ -17,6 +17,10 @@ from sigmaforge.records import MatchRecord
 # appended. Setting it is an explicit trust decision about your environment.
 
 
+class EngineRunError(RuntimeError):
+    """The engine process failed; the message carries a short, UNSANITIZED stderr tail."""
+
+
 def _engine_cmd() -> list[str]:
     """Interpreter prefix of the engine command, built at call time (no import-time state)."""
     override = os.environ.get("SIGMAFORGE_ZIRCOLITE")
@@ -107,7 +111,14 @@ def run_shard(
         cmd += ["--xml-input"]
     if mapping_path:
         cmd += ["--config", mapping_path]
-    subprocess.run(cmd, check=True, cwd=str(home))
+    # The engine echoes rule titles (attacker text) to its own stdout/stderr: capture both so
+    # raw terminal escapes / Rich markup never reach the user's tty. Nothing is streamed on
+    # success; on failure only a short tail of stderr is surfaced (sanitized by the CLI).
+    try:
+        subprocess.run(cmd, check=True, cwd=str(home), capture_output=True, text=True, errors="replace")
+    except subprocess.CalledProcessError as e:
+        tail = "\n".join((e.stderr or "").strip().splitlines()[-5:])[-600:]
+        raise EngineRunError(f"engine exited with status {e.returncode}: {tail}") from None
     with open(out) as fh:
         return parse_detections(
             json.load(fh),

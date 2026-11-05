@@ -10,6 +10,8 @@ _PATTERNS = (
     r'"\$CMD"\s+(\w[\w-]*)',
     r"\bsigmaforge\s+(\w[\w-]*)",
     r'^\s*run\s+\S+\s+(?:"\$CMD"|sigmaforge)\s+(\w[\w-]*)',
+    # unquoted spellings: $CMD word / ${CMD} word / "${CMD}" word
+    r'(?:"?\$\{CMD\}"?|\$CMD)\s+(\w[\w-]*)',
 )
 
 
@@ -46,3 +48,15 @@ def test_dogfood_calls_are_hermetic():
     for line in text.splitlines():
         if re.match(r'^\s*run\s+\S+\s+"\$CMD"\s+(backtest|hunt)\s+(?!--help)', line):
             assert '--config "$EMPTY_CFG"' in line, line
+
+
+def test_tokens_catch_unquoted_cmd_spellings():
+    assert _tokens("  run 0 $CMD classify x") >= {"classify"}
+    assert _tokens("  run 0 ${CMD} gone x") >= {"gone"}
+    assert _tokens('  run 0 "${CMD}" gone2 x') >= {"gone2"}
+    assert _tokens("  uv run $CMD gone3") >= {"gone3"}
+
+
+def test_dogfood_has_a_past_preflight_case():
+    text = (REPO / "dogfood.sh").read_text()
+    assert '--engine-home "$FAKE_ENGINE"' in text and "ESC byte" in text

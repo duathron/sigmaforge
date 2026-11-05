@@ -124,3 +124,92 @@ def test_fp_tuning_and_tautology_titles_are_neutralized():
 def test_benign_title_unchanged():
     md = render_report([_evil_row("Whoami Execution")], {})
     assert "| Whoami Execution | 1.0 | 1.0 |" in md
+
+
+# --- parsers, not regexes: the rendered title must be ONE cell equal to the original ---
+
+from html.parser import HTMLParser  # noqa: E402
+
+import markdown as _py_markdown  # noqa: E402
+from markdown_it import MarkdownIt  # noqa: E402
+
+
+class _Rows(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.rows, self._cell = [], None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self.rows.append([])
+        elif tag in ("td", "th"):
+            self._cell = []
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._cell is not None:
+            self.rows[-1].append("".join(self._cell))
+            self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _html_rows(html):
+    p = _Rows()
+    p.feed(html)
+    return p.rows
+
+
+def _parse_both(md):
+    yield "markdown-it-py", MarkdownIt("commonmark").enable("table").render(md)
+    yield "python-markdown", _py_markdown.markdown(md, extensions=["tables"])
+
+
+import pytest  # noqa: E402
+
+_TITLES = ["a\\|b", "Evil\\| FORGED", "x\\", "a\\\\|b", "a|b", "plain"]
+
+
+@pytest.mark.parametrize("title", _TITLES)
+def test_title_is_one_cell_equal_to_original_in_real_parsers(title):
+    md = render_report([_evil_row(title)], {})
+    for name, html in _parse_both(md):
+        rows = _html_rows(html)
+        header = next(r for r in rows if r and r[0] == "rule")
+        body = [r for r in rows if r is not header]
+        assert len(body) == 1, (name, rows)
+        assert len(body[0]) == len(header), (name, body[0])
+        assert body[0][0] == title, (name, body[0][0])
+
+
+def test_hostile_reasons_and_source_stay_in_their_cells():
+    row = _evil_row("t")
+    row.update(recall="unmeasured", recall_reason="r|\\|x\n## h", precision_reason="p\\", fp=0)
+    row["precision@S|1"] = "unmeasured"
+    md = render_report([row], {}, source="S|1")
+    assert not any(ln.startswith("## h") for ln in md.splitlines())
+    for name, html in _parse_both(md):
+        rows = _html_rows(html)
+        header = next(r for r in rows if r and r[0] == "rule")
+        body = [r for r in rows if r is not header]
+        assert len(body[0]) == len(header), name
+        assert header[2] == "precision@S|1", (name, header)
+        assert body[0][1] == "unmeasured (r|\\|x ## h)", (name, body[0][1])
+
+
+def test_tautology_bullet_and_sort_order_pinned():
+    a = {"rule": "b|rule", "precision@S|1": 1.0, "no_benign_exemplars": True, "tp": 1, "fp": 0}
+    b = {"rule": "a\n## own", "precision@S|1": 1.0, "no_benign_exemplars": True, "tp": 1, "fp": 0}
+    md = render_report([a, b], {}, source="S|1")
+    bullets = [ln for ln in md.splitlines() if ln.startswith("- **") and "reports precision@" in ln]
+    assert len(bullets) == 2
+    assert "precision@S&#124;1 =" in bullets[0] and "a ## own" in bullets[0]  # sorted by raw title
+    assert "b&#124;rule" in bullets[1]
+    assert not any(ln.startswith("## own") for ln in md.splitlines())
+
+
+def test_tabs_are_flattened_in_cells():
+    md = render_report([_evil_row("a\tb")], {})
+    assert "\t" not in md
+    assert "| a b |" in md

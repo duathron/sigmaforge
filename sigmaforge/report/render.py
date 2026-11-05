@@ -5,10 +5,12 @@ from shipwright_kit.security.render import safe_render
 
 def _md_cell(text) -> str:
     """Neutralize an untrusted value for a Markdown line or table cell: control/ANSI/bidi
-    characters stripped, line breaks flattened to a space, pipes escaped so the value cannot
-    start a new line or forge table cells. Does NOT neutralize Markdown links or HTML."""
-    flat = re.sub(r"\r\n|\r|\n", " ", safe_render(str(text), escape_markup=False))
-    return flat.replace("|", "\\|")
+    characters stripped, line breaks and tabs flattened to a space, backslashes doubled (so a
+    trailing or doubled backslash cannot escape what follows) and pipes encoded as `&#124;`
+    (not a column separator in any GFM parser, renders as `|`). Does NOT neutralize Markdown
+    links or HTML in the value: known-open, documented in the manual."""
+    flat = re.sub(r"[\r\n\t]+", " ", safe_render(str(text), escape_markup=False))
+    return flat.replace("\\", "\\\\").replace("|", "&#124;")
 
 
 def _with_reason(value, reason: str | None):
