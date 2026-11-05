@@ -4,6 +4,7 @@ Zircolite there); the real-engine tests stay skipped."""
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -276,7 +277,8 @@ def test_hunt_has_engine_home_flag_and_threads_it(tmp_path, monkeypatch):
     import sigmaforge.ingest.zircolite_runner as runner_mod
 
     res = CliRunner().invoke(app, ["hunt", "--help"], env={"COLUMNS": "200"})
-    assert "--engine-home" in " ".join(res.output.split())
+    # strip ANSI (CI colors the help) before looking for the option name
+    assert "--engine-home" in re.sub(r"\x1b\[[0-9;]*m", "", res.output)
 
     good = _fake_engine(tmp_path / "good", "GOOD").resolve()
     rules = tmp_path / "r.yml"
