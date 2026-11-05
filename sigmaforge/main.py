@@ -1,12 +1,11 @@
 """sigmaforge — CLI entry point.
 
 Exit-code table (canonical, owned here):
-  0 ok · 2 usage · 3 no-engine · 4 no-corpus/missing-inputs · 5 gate-FAIL.
+  0 ok · 1 engine-failed · 2 usage · 3 no-engine · 4 no-corpus/missing-inputs · 5 gate-FAIL.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -14,17 +13,14 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from shipwright_kit.cli import build_typer
-from shipwright_kit.security.render import safe_render
 
 from sigmaforge import __version__
 from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
 from sigmaforge.ingest.zircolite_runner import EngineRunError
+from sigmaforge.safe_text import plain_safe
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
 console = Console(emoji=False)
-
-
-_LINE_BREAKS = re.compile(r"[\r\n\t\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]+")
 
 
 def _rich_safe(x: object) -> str:
@@ -32,7 +28,7 @@ def _rich_safe(x: object) -> str:
     space (no forged output lines), control/ANSI/bidi stripped, then markup escaped.
     Not `safe_render(x)` alone: that doubles backslashes (Windows paths) on the console.
     Print the result with `soft_wrap=True` so Rich cannot re-wrap it into a new line start."""
-    return escape(safe_render(_LINE_BREAKS.sub(" ", str(x)), escape_markup=False))
+    return escape(plain_safe(x))
 
 
 @app.command()

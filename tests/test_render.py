@@ -168,7 +168,7 @@ def _parse_both(md):
 
 import pytest  # noqa: E402
 
-_TITLES = ["a\\|b", "Evil\\| FORGED", "x\\", "a\\\\|b", "a|b", "plain"]
+_TITLES = ["a\\|b", "Evil\\| FORGED", "x\\", "a\\\\|b", "a|b", "plain", "a&#124;b", "R&D", "a&amp;b", "&lt;b&gt;"]
 
 
 @pytest.mark.parametrize("title", _TITLES)

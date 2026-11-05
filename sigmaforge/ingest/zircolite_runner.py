@@ -117,7 +117,9 @@ def run_shard(
     try:
         subprocess.run(cmd, check=True, cwd=str(home), capture_output=True, text=True, errors="replace")
     except subprocess.CalledProcessError as e:
-        tail = "\n".join((e.stderr or "").strip().splitlines()[-5:])[-600:]
+        # stderr tail; stdout when the engine wrote nothing to stderr
+        src = (e.stderr or "").strip() or (e.stdout or "").strip()
+        tail = "\n".join(src.splitlines()[-5:])[-600:]
         raise EngineRunError(f"engine exited with status {e.returncode}: {tail}") from None
     with open(out) as fh:
         return parse_detections(

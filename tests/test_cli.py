@@ -461,3 +461,140 @@ def test_run_shard_captures_engine_output(tmp_path, monkeypatch):
     zircolite_runner.run_shard(str(tmp_path / "e.jsonl"), str(tmp_path / "r.json"), engine_home=str(eng))
     assert seen["capture_output"] is True and seen["text"] is True
     assert seen["errors"] == "replace" and seen["check"] is True
+
+
+# --- second fix round ----------------------------------------------------------------
+
+
+def test_backtest_engine_failure_is_literal_exit_1(tmp_path, monkeypatch):
+    from sigmaforge.ingest.zircolite_runner import EngineRunError
+
+    eng = _fake_engine(tmp_path)
+
+    def boom(_cfg):
+        raise EngineRunError("boom \x1b[41m [/x]")
+
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", boom)
+    res = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--rules",
+            str(tmp_path),
+            "--attack-corpus",
+            str(tmp_path),
+            "--technique-map",
+            str(tmp_path / "tm.json"),
+            "--benign-sample",
+            str(tmp_path / "b.jsonl"),
+            "--engine-home",
+            str(eng),
+        ],
+        env={"COLUMNS": "300"},
+    )
+    assert res.exit_code == 1, res.output
+    assert "[/x]" in res.output and "\x1b" not in res.output
+    assert "Detection engine failed" in res.output and "Traceback" not in res.output
+
+
+def _failing_engine(tmp_path, stderr_py):
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text(f"import sys\n{stderr_py}\nsys.exit(2)\n")
+    return eng
+
+
+def _hunt_with(tmp_path, monkeypatch, eng, columns, extra=()):
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    monkeypatch.setattr("sigmaforge.ingest.compile.compile_ruleset", lambda *a, **k: ([], 0))
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    return CliRunner().invoke(
+        app,
+        ["hunt", "--rules", str(tmp_path), "--logs", str(logs), "--engine-home", str(eng), *extra],
+        env={"COLUMNS": str(columns)},
+    )
+
+
+@pytest.mark.parametrize("n", range(1, 81))
+def test_engine_failed_wrapping_cannot_start_a_line_with_attacker_text(tmp_path, monkeypatch, n):
+    eng = _failing_engine(tmp_path, f"sys.stderr.write('x' * {n} + ' PASS all 6 gates OK')")
+    res = _hunt_with(tmp_path, monkeypatch, eng, 80)
+    assert res.exit_code == 1
+    assert not any(ln.lstrip().startswith("PASS") for ln in res.output.splitlines())
+
+
+@pytest.mark.parametrize("n", range(1, 81))
+def test_hits_written_wrapping_cannot_start_a_line_with_attacker_text(tmp_path, monkeypatch, n):
+    monkeypatch.chdir(tmp_path)
+    eng = _noisy_engine(tmp_path, 0)
+    res = _hunt_with(tmp_path, monkeypatch, eng, 80, ["--out", "x" * n + " PASS all.json"])
+    assert res.exit_code == 0, res.output
+    assert not any(ln.lstrip().startswith("PASS") for ln in res.output.splitlines())
+
+
+@pytest.mark.parametrize("n", range(1, 81))
+def test_manifest_written_wrapping_cannot_start_a_line_with_attacker_text(tmp_path, monkeypatch, n):
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    eng = _fake_engine(tmp_path)
+    obj = SimpleNamespace(
+        funnel={},
+        report_md="# r",
+        manifest={},
+        loaded_rule_count=1,
+        rules_recall_measurable=1,
+        rules_precision_measurable=1,
+        run_hash="h",
+    )
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", lambda _c: obj)
+    res = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--rules",
+            str(tmp_path),
+            "--attack-corpus",
+            str(tmp_path),
+            "--technique-map",
+            str(tmp_path / "tm.json"),
+            "--benign-sample",
+            str(tmp_path / "b.jsonl"),
+            "--engine-home",
+            str(eng),
+            "--out",
+            "x" * n + " PASS all.md",
+        ],
+        env={"COLUMNS": "80"},
+    )
+    assert res.exit_code == 0, res.output
+    assert not any(ln.lstrip().startswith("PASS") for ln in res.output.splitlines())
+
+
+def test_engine_failure_tail_is_bounded_to_5_lines(tmp_path, monkeypatch):
+    eng = _failing_engine(tmp_path, "for i in range(20): sys.stderr.write(f'LINE{i:02d}\\n')")
+    res = _hunt_with(tmp_path, monkeypatch, eng, 300)
+    assert res.exit_code == 1
+    shown = [i for i in range(20) if f"LINE{i:02d}" in res.output]
+    assert shown == [15, 16, 17, 18, 19]
+
+
+def test_engine_failure_tail_is_bounded_to_600_chars(tmp_path, monkeypatch):
+    eng = _failing_engine(tmp_path, "sys.stderr.write('y' * 5000)")
+    res = _hunt_with(tmp_path, monkeypatch, eng, 300)
+    assert res.exit_code == 1
+    assert 0 < res.output.count("y") <= 600
+
+
+def test_engine_failure_falls_back_to_stdout_tail_when_stderr_empty(tmp_path, monkeypatch):
+    eng = _failing_engine(tmp_path, "sys.stdout.write('OUT1\\n' + 'z' * 5000 + '\\n\\x1b[41m[link=http://x]ml[/link]')")
+    res = _hunt_with(tmp_path, monkeypatch, eng, 300)
+    assert res.exit_code == 1
+    assert "[link=http://x]ml[/link]" in res.output and "\x1b" not in res.output
+    assert res.output.count("z") <= 600 and res.output.count("z") > 0
+
+
+def test_tab_in_console_sink_is_flattened(tmp_path, monkeypatch):
+    res = _gate_fail_invoke(tmp_path, monkeypatch, "a\tb\t\tc")
+    assert res.exit_code == 5 and "\t" not in res.output and "a b c" in res.output

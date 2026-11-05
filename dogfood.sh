@@ -5,7 +5,8 @@
 # Hermetic: no engine, no corpus, no user config. Every call runs with SIGMAFORGE_HOME /
 # SIGMAFORGE_ZIRCOLITE unset and an empty --config, so an installed engine or a personal
 # config cannot change the outcome. The CLI must handle every input gracefully:
-# an allowed exit code is 0 (ok), 3 (no engine) or 4 (no corpus); 1 (crash) or 2 (usage) fails,
+# an allowed exit code is 0 (ok), 3 (no engine) or 4 (no corpus); 1 (a crash OR an engine
+# failure, both mean the run did not complete) or 2 (usage) fails,
 # and so does any raw ESC byte in the output (terminal-escape injection).
 #
 # What the tiers prove: the no-engine / adversarial tier proves the CLI refuses cleanly (never
@@ -34,7 +35,9 @@ PYEOF
 cat >"$FAKE_ENGINE/Zircolite/zircolite/rules.py" <<'PYEOF'
 class RulesetHandler:
     def __init__(self, ruleset_config, logger):
-        self.rulesets = [{"title": "[/x][bold]PASS\x1b]0;t\x07 | 9 | 9\n## forged"}]
+        title = "[/x][bold]PASS\x1b]0;t\x07 | 9 | 9\n## forged"
+        logger.info("converted %s", title)
+        self.rulesets = [{"title": title}]
 PYEOF
 cat >"$FAKE_ENGINE/Zircolite/zircolite.py" <<'PYEOF'
 import sys

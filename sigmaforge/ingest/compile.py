@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 from sigmaforge.engine import EngineNotFoundError, require_engine_home
+from sigmaforge.safe_text import plain_safe
 
 #: Zircolite pySigma pipeline name (matches the bundled snapshot's conversion).
 PIPELINE = "sysmon"
@@ -49,6 +50,26 @@ def _refuse_foreign_zircolite(engine: Path) -> None:
                 raise EngineNotFoundError(f"{name} was already imported from {loc}, not from {engine}")
 
 
+class _SanitizingFormatter(logging.Formatter):
+    """Engine log lines carry rule-derived (attacker) text: flatten + strip before stderr."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return plain_safe(record.getMessage())
+
+
+def _engine_logger() -> logging.Logger:
+    """The engine's loggers write to stderr through a sanitizing handler; the root logger is
+    never configured (no global side effect, no raw `basicConfig` handler)."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(_SanitizingFormatter())
+    for name in ("zircolite", "compile_loaded_ruleset"):
+        lg = logging.getLogger(name)
+        lg.handlers = [handler]
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
+    return logging.getLogger("compile_loaded_ruleset")
+
+
 def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) -> tuple[list[dict], int]:
     """Convert exactly `paths` through Zircolite's pySigma sqlite backend.
 
@@ -68,8 +89,7 @@ def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) ->
     if not Path(zconfig.__file__).resolve().is_relative_to(engine):
         raise EngineNotFoundError(f"zircolite was imported from {zconfig.__file__}, not from {engine}")
 
-    logger = logging.getLogger("compile_loaded_ruleset")
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logger = _engine_logger()
 
     with tempfile.TemporaryDirectory(prefix="sigmaforge_loaded_") as tmp:
         stage = Path(tmp)

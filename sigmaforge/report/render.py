@@ -6,11 +6,12 @@ from shipwright_kit.security.render import safe_render
 def _md_cell(text) -> str:
     """Neutralize an untrusted value for a Markdown line or table cell: control/ANSI/bidi
     characters stripped, line breaks and tabs flattened to a space, backslashes doubled (so a
-    trailing or doubled backslash cannot escape what follows) and pipes encoded as `&#124;`
-    (not a column separator in any GFM parser, renders as `|`). Does NOT neutralize Markdown
+    trailing or doubled backslash cannot escape what follows), `&` written as `&amp;` (so a literal
+    entity in a title stays literal) and pipes encoded as `&#124;` (not a column separator in
+    any GFM parser, renders as `|`). Does NOT neutralize Markdown
     links or HTML in the value: known-open, documented in the manual."""
     flat = re.sub(r"[\r\n\t]+", " ", safe_render(str(text), escape_markup=False))
-    return flat.replace("\\", "\\\\").replace("|", "&#124;")
+    return flat.replace("\\", "\\\\").replace("&", "&amp;").replace("|", "&#124;")
 
 
 def _with_reason(value, reason: str | None):
