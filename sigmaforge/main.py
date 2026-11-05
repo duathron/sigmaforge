@@ -13,12 +13,19 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from shipwright_kit.cli import build_typer
+from shipwright_kit.security.render import safe_render
 
 from sigmaforge import __version__
 from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
-console = Console()
+console = Console(emoji=False)
+
+
+def _rich_safe(x: object) -> str:
+    """Untrusted text for a Rich markup sink: control/ANSI/bidi stripped, then markup escaped.
+    Not `safe_render(x)` alone: that doubles backslashes (Windows paths) on the console."""
+    return escape(safe_render(str(x), escape_markup=False))
 
 
 @app.command()
@@ -34,7 +41,7 @@ def manual() -> None:
 
 def _engine_refused(err: Exception) -> NoReturn:
     """The engine could not be used safely (e.g. a foreign `zircolite` already imported)."""
-    console.print(f"[red]Detection engine refused[/red]: {escape(str(err))}")
+    console.print(f"[red]Detection engine refused[/red]: {_rich_safe(err)}")
     console.print("Point --engine-home / SIGMAFORGE_HOME at the engine root, in a fresh process.")
     raise typer.Exit(3) from None
 
@@ -141,7 +148,7 @@ def backtest(
     except AssertionError as e:
         # FIX H acceptance gate FAILED — a real engine/scored discrepancy. Surface as the
         # canonical gate-FAIL exit code, not a traceback.
-        console.print(f"[red]Acceptance gate FAILED[/red]: {e}")
+        console.print(f"[red]Acceptance gate FAILED[/red]: {_rich_safe(e)}")
         raise typer.Exit(5) from None
 
     # Never silently pooled-recall: refuse a run that fell back to the pooled denominator.
@@ -158,8 +165,8 @@ def backtest(
     out_path.write_text(res.report_md)
     manifest_path = out_path.with_suffix(".manifest.json")
     manifest_path.write_text(json.dumps(res.manifest, indent=2, sort_keys=True))
-    console.print(f"report written: {out_path}")
-    console.print(f"manifest written: {manifest_path}")
+    console.print(f"report written: {_rich_safe(out_path)}")
+    console.print(f"manifest written: {_rich_safe(manifest_path)}")
     console.print(
         f"loaded={res.loaded_rule_count} recall-measurable={res.rules_recall_measurable} "
         f"precision-measurable={res.rules_precision_measurable} run_hash={res.run_hash}"
@@ -264,7 +271,7 @@ def hunt(
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True))
 
     console.print(f"[yellow]{_HUNT_BANNER}[/yellow]")
-    console.print(f"hits written: {out_path} ({len(hits)} hit(s), {len(compiled)} rule(s) compiled)")
+    console.print(f"hits written: {_rich_safe(out_path)} ({len(hits)} hit(s), {len(compiled)} rule(s) compiled)")
 
 
 def main() -> None:

@@ -155,3 +155,64 @@ def test_manual_is_packaged_data():
     from importlib.resources import files
 
     assert files("sigmaforge").joinpath("MANUAL.md").is_file()
+
+
+# --- F8: untrusted Sigma rule text must not be parsed as Rich markup --------------
+
+
+def _gate_fail_invoke(tmp_path, monkeypatch, message):
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text("")
+
+    def raiser(_cfg):
+        raise AssertionError(message)
+
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", raiser)
+    return CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--rules",
+            str(tmp_path),
+            "--attack-corpus",
+            str(tmp_path),
+            "--technique-map",
+            str(tmp_path / "tm.json"),
+            "--benign-sample",
+            str(tmp_path / "b.jsonl"),
+            "--engine-home",
+            str(eng),
+        ],
+        env={"COLUMNS": "300"},
+    )
+
+
+def test_gate_fail_with_markup_title_exits_5_and_shows_literal(tmp_path, monkeypatch):
+    msg = "fired rule(s) outside the loaded set: ['[/x]', '[bold]PASS[/bold]']"
+    res = _gate_fail_invoke(tmp_path, monkeypatch, msg)
+    assert res.exit_code == 5
+    assert "[/x]" in res.output
+    assert "[bold]PASS[/bold]" in res.output
+    assert "Traceback" not in res.output
+
+
+def test_gate_fail_keeps_backslashes_verbatim(tmp_path, monkeypatch):
+    msg = r"fired rule(s) outside the loaded set: ['C:\rules\x.yml', '[/x]']"
+    res = _gate_fail_invoke(tmp_path, monkeypatch, msg)
+    assert res.exit_code == 5
+    assert r"C:\rules\x.yml" in res.output
+    assert r"C:\\rules" not in res.output
+    assert "[/x]" in res.output
+
+
+def test_gate_fail_does_not_expand_emoji_codes(tmp_path, monkeypatch):
+    res = _gate_fail_invoke(tmp_path, monkeypatch, "rule :smile: :warning:")
+    assert res.exit_code == 5
+    assert ":smile:" in res.output and ":warning:" in res.output
+
+
+def test_gate_fail_strips_terminal_escapes(tmp_path, monkeypatch):
+    res = _gate_fail_invoke(tmp_path, monkeypatch, "title \x1b]0;pwned\x07 \x1b[31mred")
+    assert res.exit_code == 5
+    assert "\x1b" not in res.output and "\x07" not in res.output
