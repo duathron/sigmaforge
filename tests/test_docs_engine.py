@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCS = {"README.md": ROOT / "README.md", "MANUAL.md": ROOT / "sigmaforge" / "MANUAL.md"}
+DOCS = {
+    "README.md": ROOT / "README.md",
+    "MANUAL.md": ROOT / "sigmaforge" / "MANUAL.md",
+    "CLAUDE.md": ROOT / "CLAUDE.md",
+}
 
 # stale claims (whitespace-normalised, case-insensitive)
 STALE = [
@@ -18,6 +22,7 @@ STALE = [
     r"defaults? to the current directory",
     r"engine working dir defaults",
     r"run scripts from the repo root",
+    r"env \(`?SIGMAFORGE_\*`?\) > `?~/\.sigmaforge",
 ]
 
 
