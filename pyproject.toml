@@ -15,7 +15,7 @@ dependencies = [
     "rich>=13.7.0",
     "pydantic>=2.7.0",
     "pyyaml>=6.0",  # shipped sigmaforge/config.py + main.py import yaml
-    "shipwright-kit>=0.8.0",  # PyPI release (PyPI rejects git+ direct-URL deps)
+    "shipwright-kit>=0.12.1,<0.13",  # PyPI release (PyPI rejects git+ direct-URL deps)
 ]
 
 [tool.shipwright]
