@@ -37,6 +37,7 @@ silent loss).
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -75,6 +76,8 @@ def loaded_rule_paths() -> tuple[list[Path], list[dict]]:
 
 
 def main() -> int:
+    # The engine is never taken from the current directory; these scripts run from this checkout.
+    os.environ.setdefault("SIGMAFORGE_HOME", str(REPO))
     paths, loaded = loaded_rule_paths()
     n_loaded = len(loaded)
     print(f"[loaded] partition_rules selected {n_loaded} rules ({len(paths)} source .yml files)", flush=True)
