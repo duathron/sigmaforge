@@ -94,6 +94,7 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 | 3 | engine not found or `--engine-home` / `engine_home` empty — run `scripts/setup_engine.sh` (then `--engine-home`, config `engine_home` or `$SIGMAFORGE_HOME`) |
 | 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora |
 | 5 | acceptance gate FAILED (engine fires ≠ scored fires) |
+| 1 | the engine process itself failed (a short, sanitized tail of its stderr is shown) |
 
 Codes 3 and 4 are **teaching errors**: they name what to run and never print a
 traceback or an empty report.
@@ -162,6 +163,16 @@ appended, and the engine runs with its own root as working directory.
 treated as your own trusted environment: whatever they point at is executed with your
 privileges. A relative `SIGMAFORGE_HOME` resolves against the current directory, so
 prefer an absolute path. Do not set them from untrusted input.
+
+**Engine output is not streamed.** The engine's stdout and stderr are captured: rule titles
+are untrusted text and the engine echoes them. On success nothing from the engine is
+printed; on failure only a short sanitized tail of its stderr is shown.
+
+**Untrusted rule text.** Rule titles and other rule-derived text are escaped at the terminal
+(Rich markup, control characters, line breaks) and in the Markdown report (control
+characters and line breaks removed, `|` written as `&#124;`, backslashes doubled). Markdown
+links and HTML inside a rule title are **not** neutralised: treat a report built from
+untrusted rules as untrusted Markdown when you render it.
 
 ## Reproduce a backtest
 
