@@ -65,6 +65,7 @@ def test_no_caveats_block_when_not_provided():
 
 # --- F8: a rule title is attacker-controlled; it must stay inside its table cell ---
 
+
 def _evil_row(title):
     return {
         "rule": title,
