@@ -51,6 +51,7 @@ class PipelineConfig:
     evtx_cfg: str  # Zircolite EVTX field-mapping config
     min_events: int = 1000
     source: str = "COMISET"
+    engine_home: str | None = None  # engine root; None -> $SIGMAFORGE_HOME (never the cwd)
 
 
 @dataclass
@@ -131,6 +132,7 @@ def run_backtest_pipeline(cfg: PipelineConfig) -> BacktestResult:
         corpus_label="malicious",
         file_technique_map=file_technique,
         event_technique_out=event_technique,
+        engine_home=cfg.engine_home,
     )
 
     # --- Precision pass — benign corpus, SAME one-source ruleset ---
@@ -139,6 +141,7 @@ def run_backtest_pipeline(cfg: PipelineConfig) -> BacktestResult:
         cfg.compiled_ruleset,
         mapping_path=cfg.comiset_mapping,
         json_input=True,
+        engine_home=cfg.engine_home,
     )
 
     field_map = _load_comiset_field_map(cfg.comiset_mapping)
@@ -206,7 +209,7 @@ def run_backtest_pipeline(cfg: PipelineConfig) -> BacktestResult:
         benign_fires=len(set_benign),
         positive_control_fired=pc_fired,
         run_hash=rh,
-        provenance=provenance(),
+        provenance=provenance(engine_home=cfg.engine_home),
     )
 
     return BacktestResult(

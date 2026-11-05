@@ -17,7 +17,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from sigmaforge.ingest.zircolite_runner import _zircolite_home
+from sigmaforge.engine import resolve_engine_home
 
 # Engine deps whose version changes how a rule compiles or fires (pySigma backend +
 # the JSON/XML parsers Zircolite uses). Diffing these across machines localizes a
@@ -47,16 +47,17 @@ def _git(repo: Path, *args: str) -> str | None:
         return None
 
 
-def engine_provenance(engine_home: str | None = None) -> dict:
+def engine_provenance(engine_home: str | Path | None = None) -> dict:
     """The vendored Zircolite engine's exact source: commit SHA + tag if it is a git
     checkout (as `scripts/setup_engine.sh` produces), else flagged unavailable. The
     version STRING a human typed is not enough — two builds of "3.7.6" can differ."""
-    home = Path(engine_home) if engine_home else Path(_zircolite_home())
-    zdir = home / "Zircolite"
-    sha = _git(zdir, "rev-parse", "HEAD")
+    home = Path(engine_home) if engine_home else resolve_engine_home(None)
+    zdir = home / "Zircolite" if home else None
+    sha = _git(zdir, "rev-parse", "HEAD") if zdir else None
+    tag = _git(zdir, "describe", "--tags", "--always") if zdir else None
     return {
         "zircolite_commit_sha": sha or "unavailable (engine not a git checkout)",
-        "zircolite_tag": _git(zdir, "describe", "--tags", "--always") or "unavailable",
+        "zircolite_tag": tag or "unavailable",
     }
 
 
@@ -78,6 +79,6 @@ def environment_block() -> dict:
     }
 
 
-def provenance(engine_home: str | None = None) -> dict:
+def provenance(engine_home: str | Path | None = None) -> dict:
     """Full provenance block for the manifest: engine source + environment closure."""
     return {**engine_provenance(engine_home), "environment": environment_block()}

@@ -2,22 +2,25 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
+from pathlib import Path
 
+from sigmaforge.engine import engine_script, require_engine_home
 from sigmaforge.records import MatchRecord
 
-# The Zircolite engine is NOT bundled with the pip package (large third-party tool).
-# Both the invocation and its working directory are configurable so a clone/install on
-# any machine works — no hardcoded path. SIGMAFORGE_HOME is the dir that CONTAINS the
-# `Zircolite/` checkout (defaults to the current working directory, which is the repo
-# root when the run scripts are launched from there). SIGMAFORGE_ZIRCOLITE overrides the
-# engine command (e.g. to point at a system install).
-ZIRCOLITE = os.environ.get("SIGMAFORGE_ZIRCOLITE", "uv run python Zircolite/zircolite.py").split()
+# The Zircolite engine is NOT bundled with the pip package (large third-party tool). Its
+# root (the dir that CONTAINS `Zircolite/`) comes from the caller (`engine_home`) or
+# $SIGMAFORGE_HOME — never from the current directory (see sigmaforge.engine).
+# SIGMAFORGE_ZIRCOLITE replaces ONLY the interpreter prefix of the engine command
+# (default: the interpreter running sigmaforge); the absolute engine script path is always
+# appended. Setting it is an explicit trust decision about your environment.
 
 
-def _zircolite_home() -> str:
-    """Working dir for the engine subprocess: SIGMAFORGE_HOME or the current dir."""
-    return os.environ.get("SIGMAFORGE_HOME", os.getcwd())
+def _engine_cmd() -> list[str]:
+    """Interpreter prefix of the engine command, built at call time (no import-time state)."""
+    override = os.environ.get("SIGMAFORGE_ZIRCOLITE")
+    return override.split() if override else [sys.executable]
 
 
 def _stable_event_id(row: dict) -> str:
@@ -73,6 +76,7 @@ def run_shard(
     corpus_label: str | None = None,
     file_technique_map: dict[str, str] | None = None,
     event_technique_out: dict[str, str] | None = None,
+    engine_home: str | Path | None = None,
 ) -> list[MatchRecord]:
     """Run Zircolite over a shard and parse detections.
 
@@ -83,18 +87,27 @@ def run_shard(
     ``<Events>...</Events>`` document per file, Zircolite ``--xml-input``). Like the
     native-EVTX path, each event's ``OriginalLogfile`` is set to the .xml basename,
     so the same ``file_technique_map`` (basename -> (sub-)technique) recall join
-    applies. ``json_input`` and ``xml_input`` are mutually exclusive."""
+    applies. ``json_input`` and ``xml_input`` are mutually exclusive.
+
+    ``engine_home`` (else $SIGMAFORGE_HOME) names the engine root; there is no CWD fallback.
+    The engine runs with ``cwd=<engine home>``, so caller paths are made absolute first."""
     if json_input and xml_input:
         raise ValueError("json_input and xml_input are mutually exclusive")
+    home = require_engine_home(engine_home)
+    events_path = os.path.abspath(events_path)
+    ruleset_glob = os.path.abspath(ruleset_glob)
+    if mapping_path:
+        mapping_path = os.path.abspath(mapping_path)
     out = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
-    cmd = [*ZIRCOLITE, "--events", events_path, "--ruleset", ruleset_glob, "--outfile", out]
+    cmd = [*_engine_cmd(), str(engine_script(home)), "--events", events_path, "--ruleset", ruleset_glob]
+    cmd += ["--outfile", out]
     if json_input:
         cmd += ["--json-input"]
     if xml_input:
         cmd += ["--xml-input"]
     if mapping_path:
         cmd += ["--config", mapping_path]
-    subprocess.run(cmd, check=True, cwd=_zircolite_home())
+    subprocess.run(cmd, check=True, cwd=str(home))
     with open(out) as fh:
         return parse_detections(
             json.load(fh),

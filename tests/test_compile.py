@@ -33,7 +33,7 @@ def test_compile_smoke_fixture_yields_one_titled_rule():
     paths = sorted(SMOKE_RULES.glob("*.yml"))
     assert paths, f"no fixture rules under {SMOKE_RULES}"
 
-    ruleset, n_staged = compile_ruleset(paths)
+    ruleset, n_staged = compile_ruleset(paths, engine_home=REPO)
 
     assert n_staged == len(paths)
     assert len(ruleset) == 1

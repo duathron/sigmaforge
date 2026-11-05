@@ -40,13 +40,21 @@ class AppConfig(BaseModel):
 
 def _load_yaml(path: Path) -> dict:
     with open(path) as f:
-        return yaml.safe_load(f) or {}
+        data = yaml.safe_load(f) or {}
+    # A relative engine_home in a config file means "relative to THAT file", not the cwd.
+    bt = data.get("backtest")
+    if isinstance(bt, dict) and bt.get("engine_home"):
+        bt["engine_home"] = str((Path(path).parent / Path(str(bt["engine_home"])).expanduser()).resolve())
+    return data
 
 
 def load(config_path: Optional[Path] = None) -> AppConfig:
-    """Resolve config: explicit > ~/.sigmaforge/config.yaml > ./config.yaml > defaults."""
+    """Resolve config: explicit > ~/.sigmaforge/config.yaml > defaults.
+
+    The current directory is deliberately NOT a config source: a planted ./config.yaml
+    could otherwise redirect ``backtest.engine_home`` to attacker code."""
     return load_config(
-        [config_path, _APP_DIR / "config.yaml", Path("config.yaml")],
+        [config_path, _APP_DIR / "config.yaml"],
         loader=_load_yaml,
         validator=AppConfig.model_validate,
     )
