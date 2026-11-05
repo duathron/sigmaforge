@@ -20,5 +20,6 @@ fi
 echo "[setup] installing Zircolite runtime requirements into the uv env ..."
 uv pip install -r "$DEST/requirements.txt"
 
-echo "[setup] done. Engine at ./$DEST (run scripts from the repo root, or set SIGMAFORGE_HOME)."
+echo "[setup] done. Engine at $(pwd)/$DEST. Point sigmaforge at it: export SIGMAFORGE_HOME=\"$(pwd)\" (or pass --engine-home)."
+echo "[setup] do not run 'uv sync' again afterwards: it uninstalls the engine deps; re-run this script if you do."
 echo "[setup] smoke test: uv run python -c 'import orjson, lxml, evtx; print(\"engine deps OK\")'"
