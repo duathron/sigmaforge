@@ -50,6 +50,11 @@ def _refuse_foreign_zircolite(engine: Path) -> None:
                 raise EngineNotFoundError(f"{name} was already imported from {loc}, not from {engine}")
 
 
+# Logger namespaces that can carry rule text. pySigma/Zircolite are not installed where this was
+# written, so the sigma names are the documented-convention set, not measured: keep it generous.
+ENGINE_LOGGERS = ("zircolite", "sigma", "pysigma", "pySigma", "compile_loaded_ruleset")
+
+
 class _SanitizingFormatter(logging.Formatter):
     """Engine log lines carry rule-derived (attacker) text: flatten + strip before stderr."""
 
@@ -62,7 +67,7 @@ def _engine_logger() -> logging.Logger:
     never configured (no global side effect, no raw `basicConfig` handler)."""
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(_SanitizingFormatter())
-    for name in ("zircolite", "compile_loaded_ruleset"):
+    for name in ENGINE_LOGGERS:
         lg = logging.getLogger(name)
         lg.handlers = [handler]
         lg.setLevel(logging.INFO)

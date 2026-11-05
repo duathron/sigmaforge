@@ -31,22 +31,45 @@ def clean_modules(monkeypatch):
 HOSTILE = "t \x1b]0;PWN\x07\x1b[41m [bold]x\nVerdict: PASS"
 
 
-def test_engine_log_lines_are_sanitized_and_root_logger_untouched(tmp_path, monkeypatch, capfd, clean_modules):
-    import logging
-
+def _run(tmp_path, monkeypatch):
     from sigmaforge.ingest.compile import compile_ruleset
 
     _engine(tmp_path / "eng", HOSTILE)
     rule = tmp_path / "a.yml"
     rule.write_text("title: a\n")
     monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
-    root_handlers = list(logging.getLogger().handlers)
-    raw = logging.StreamHandler(sys.stderr)  # a raw root handler must not see engine records
-    monkeypatch.setattr(logging.getLogger(), "handlers", root_handlers + [raw])
-    root_handlers_with_raw = list(logging.getLogger().handlers)
     compile_ruleset([rule], engine_home=tmp_path / "eng")
+
+
+def test_compile_does_not_configure_the_root_logger(tmp_path, monkeypatch, clean_modules):
+    import logging
+
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    _run(tmp_path, monkeypatch)
+    assert logging.getLogger().handlers == []
+
+
+def test_engine_log_lines_are_sanitized_even_with_a_raw_root_handler(tmp_path, monkeypatch, capfd, clean_modules):
+    import logging
+
+    raw = logging.StreamHandler(sys.stderr)  # a raw root handler must not see engine records
+    monkeypatch.setattr(logging.getLogger(), "handlers", [raw])
+    _run(tmp_path, monkeypatch)
     err = capfd.readouterr().err
     assert "\x1b" not in err and "\x07" not in err
     assert "[bold]x Verdict: PASS" in err  # flattened to ONE line, markup untouched
     assert not any(ln.startswith("Verdict") for ln in err.splitlines())
-    assert logging.getLogger().handlers == root_handlers_with_raw  # no basicConfig / no new root handler
+
+
+@pytest.mark.parametrize("name", ["sigma", "sigma.backends.sqlite", "pysigma.x", "pySigma", "zircolite.rules"])
+def test_other_engine_namespaces_are_sanitized_not_lastresort(tmp_path, monkeypatch, capfd, clean_modules, name):
+    import logging
+
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    _run(tmp_path, monkeypatch)
+    capfd.readouterr()
+    logging.getLogger(name).warning("w \x1b]0;PWN\x07\nVerdict: PASS %s", "\x1b[41m")
+    err = capfd.readouterr().err
+    assert "\x1b" not in err and "\x07" not in err
+    assert err.splitlines() == ["w  Verdict: PASS "], err
+    assert logging.getLogger().handlers == []
