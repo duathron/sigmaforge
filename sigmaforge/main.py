@@ -7,14 +7,15 @@ Exit-code table (canonical, owned here):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from shipwright_kit.cli import build_typer
 
 from sigmaforge import __version__
-from sigmaforge.engine import resolve_engine_home
+from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
 console = Console()
@@ -29,6 +30,13 @@ def manual() -> None:
 
     text = files("sigmaforge").joinpath("MANUAL.md").read_text(encoding="utf-8")
     console.print(Markdown(text))
+
+
+def _engine_refused(err: Exception) -> NoReturn:
+    """The engine could not be used safely (e.g. a foreign `zircolite` already imported)."""
+    console.print(f"[red]Detection engine refused[/red]: {escape(str(err))}")
+    console.print("Point --engine-home / SIGMAFORGE_HOME at the engine root, in a fresh process.")
+    raise typer.Exit(3) from None
 
 
 @app.command()
@@ -64,7 +72,7 @@ def backtest(
     r_technique_map = technique_map or bt.technique_map
     r_benign = benign_sample or bt.benign_sample
     r_mapping = comiset_mapping or bt.comiset_mapping
-    r_engine_home = engine_home or bt.engine_home
+    r_engine_home = engine_home if engine_home is not None else bt.engine_home
     r_floor = floor if floor is not None else bt.floor
 
     # --- Preflight: corpus/inputs FIRST (no corpus -> go to hunt, regardless of engine) ---
@@ -128,6 +136,8 @@ def backtest(
 
     try:
         res = run_backtest_pipeline(pcfg)
+    except EngineNotFoundError as e:
+        _engine_refused(e)
     except AssertionError as e:
         # FIX H acceptance gate FAILED — a real engine/scored discrepancy. Surface as the
         # canonical gate-FAIL exit code, not a traceback.
@@ -197,7 +207,7 @@ def hunt(
     cfg = load_config(Path(config) if config else None)
 
     # --- Preflight: engine resolvable? (no corpora required — this is the pip path) ---
-    engine_root = resolve_engine_home(engine_home or cfg.backtest.engine_home)
+    engine_root = resolve_engine_home(engine_home if engine_home is not None else cfg.backtest.engine_home)
     if engine_root is None:
         console.print(
             "[red]Detection engine not found[/red] — `hunt` needs the vendored Zircolite "
@@ -213,7 +223,10 @@ def hunt(
     rule_files = sorted(rules_path.rglob("*.yml")) if rules_path.is_dir() else [rules_path]
 
     # compile_ruleset returns an IN-MEMORY list[dict]; run_shard needs a ruleset FILE.
-    compiled, _n_staged = compile_ruleset(rule_files, engine_home=str(engine_root))
+    try:
+        compiled, _n_staged = compile_ruleset(rule_files, engine_home=str(engine_root))
+    except EngineNotFoundError as e:
+        _engine_refused(e)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(compiled, fh)
         ruleset_path = fh.name

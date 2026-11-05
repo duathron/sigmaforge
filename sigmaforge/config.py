@@ -38,13 +38,21 @@ class AppConfig(BaseModel):
     backtest: BacktestConfig = BacktestConfig()
 
 
+#: Every path-valued ``backtest`` key. Relative values mean "relative to the config file".
+_PATH_KEYS = ("rules", "attack_corpus", "technique_map", "benign_sample", "comiset_mapping", "engine_home")
+
+
 def _load_yaml(path: Path) -> dict:
     with open(path) as f:
         data = yaml.safe_load(f) or {}
-    # A relative engine_home in a config file means "relative to THAT file", not the cwd.
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: config must be a YAML mapping, got {type(data).__name__}")
     bt = data.get("backtest")
-    if isinstance(bt, dict) and bt.get("engine_home"):
-        bt["engine_home"] = str((Path(path).parent / Path(str(bt["engine_home"])).expanduser()).resolve())
+    if isinstance(bt, dict):
+        base = Path(path).parent
+        for key in _PATH_KEYS:
+            if isinstance(bt.get(key), str) and bt[key]:
+                bt[key] = str((base / Path(bt[key]).expanduser()).resolve())
     return data
 
 

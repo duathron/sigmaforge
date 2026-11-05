@@ -336,15 +336,255 @@ def test_cwd_config_yaml_is_not_a_config_source(tmp_path, monkeypatch):
     assert config.load().backtest.engine_home is None
 
 
-def test_relative_engine_home_in_config_resolves_against_config_dir(tmp_path, monkeypatch):
+def test_relative_paths_in_config_resolve_against_config_dir(tmp_path, monkeypatch):
     from sigmaforge import config
 
     cfgdir = tmp_path / "cfg"
     cfgdir.mkdir()
-    (cfgdir / "c.yaml").write_text("backtest:\n  engine_home: ../eng\n")
+    keys = ("engine_home", "rules", "attack_corpus", "technique_map", "benign_sample", "comiset_mapping")
+    (cfgdir / "c.yaml").write_text("backtest:\n" + "".join(f"  {k}: ../{k}\n" for k in keys))
     monkeypatch.setattr("sigmaforge.config._APP_DIR", tmp_path / "nohome")
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    monkeypatch.chdir(elsewhere)
-    got = config.load(cfgdir / "c.yaml").backtest.engine_home
-    assert Path(got) == (tmp_path / "eng").resolve()
+    deep = tmp_path / "x" / "y"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    bt = config.load(cfgdir / "c.yaml").backtest
+    for k in keys:
+        want = (tmp_path / k).resolve()
+        # fixture self-check: resolving against the CWD instead would give another answer
+        assert (deep / ".." / k).resolve() != want
+        assert Path(getattr(bt, k)) == want, k
+
+
+def test_config_expands_tilde_in_path_values(tmp_path, monkeypatch):
+    from sigmaforge import config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("sigmaforge.config._APP_DIR", tmp_path / "nohome")
+    (tmp_path / "c.yaml").write_text("backtest:\n  engine_home: ~/eng\n  rules: ~/r\n")
+    bt = config.load(tmp_path / "c.yaml").backtest
+    assert Path(bt.engine_home) == (tmp_path / "eng").resolve()
+    assert Path(bt.rules) == (tmp_path / "r").resolve()
+
+
+def test_non_mapping_config_is_a_clear_error(tmp_path, monkeypatch):
+    from sigmaforge import config
+
+    monkeypatch.setattr("sigmaforge.config._APP_DIR", tmp_path / "nohome")
+    (tmp_path / "c.yaml").write_text("- just\n- a list\n")
+    with pytest.raises(ValueError, match="mapping"):
+        config.load(tmp_path / "c.yaml")
+
+
+# --- review round: import order, symlinks, explicit values, CLI threading ---------------
+
+
+def test_namespace_package_planted_on_path_is_not_executed(pkg_rig, tmp_path, monkeypatch):
+    # `import zircolite` first resolves a namespace package (no __init__.py) from a planted
+    # dir; compile_ruleset must refuse BEFORE importing zircolite.config from it.
+    from sigmaforge.engine import EngineNotFoundError
+    from sigmaforge.ingest.compile import compile_ruleset
+
+    good, _evil, _marker = pkg_rig
+    plant = tmp_path / "plant"
+    (plant / "zircolite").mkdir(parents=True)
+    ran = tmp_path / "ns_marker"
+    (plant / "zircolite" / "config.py").write_text(f"open({str(ran)!r}, 'w').write('x')\n")
+    monkeypatch.syspath_prepend(str(plant))
+    import zircolite  # noqa: F401  (namespace package from the planted dir)
+
+    with pytest.raises(EngineNotFoundError):
+        compile_ruleset([tmp_path / "a.yml"], engine_home=good)
+    assert not ran.exists()
+
+
+@pytest.mark.parametrize("entry", ["evil-dir", ""])
+def test_engine_dir_wins_over_planted_sys_path_entry(pkg_rig, tmp_path, monkeypatch, entry):
+    from sigmaforge.ingest.compile import compile_ruleset
+
+    good, evil, evil_marker = pkg_rig
+    monkeypatch.syspath_prepend(str(evil / "Zircolite") if entry else "")
+    if not entry:
+        sys.path.insert(0, "")  # cwd (= evil/Zircolite) entry, as `python -c` / `-m` have
+    rule = tmp_path / "a.yml"
+    rule.write_text("title: a\n")
+    compile_ruleset([rule], engine_home=good)
+    assert sys.modules["zircolite.config"].ORIGIN == "GOOD"
+    assert not evil_marker.exists()
+
+
+def test_symlinked_zircolite_dir_works(pkg_rig, tmp_path):
+    from sigmaforge.ingest.compile import compile_ruleset
+
+    good, _evil, _marker = pkg_rig
+    home = tmp_path / "linkhome"
+    home.mkdir()
+    os.symlink(good / "Zircolite", home / "Zircolite")
+    rule = tmp_path / "a.yml"
+    rule.write_text("title: a\n")
+    ruleset, n = compile_ruleset([rule], engine_home=home)
+    assert (n, ruleset) == (1, [{"title": "t"}])
+    assert sys.modules["zircolite.config"].ORIGIN == "GOOD"
+
+
+def test_resolve_engine_home_explicit_forms(tmp_path, monkeypatch):
+    from sigmaforge.engine import resolve_engine_home
+
+    good = _fake_engine(tmp_path / "x", "GOOD")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    assert resolve_engine_home("~/x") == good.resolve()  # ~ expanded
+    monkeypatch.chdir(tmp_path)
+    assert resolve_engine_home("x") == good.resolve()  # relative -> absolute
+    monkeypatch.chdir(good)  # "" must NOT mean "the current directory"
+    assert resolve_engine_home("") is None
+    monkeypatch.setenv("SIGMAFORGE_HOME", str(good))
+    assert resolve_engine_home("") is None  # explicit-but-empty does not fall through to the env
+
+
+@pytest.fixture
+def cli_rig(tmp_path, monkeypatch):
+    good = _fake_engine(tmp_path / "good", "GOOD").resolve()
+    other = _fake_engine(tmp_path / "other", "OTHER").resolve()
+    cfg = tmp_path / "empty.yaml"
+    cfg.write_text("{}\n")
+    monkeypatch.setattr("sigmaforge.config._APP_DIR", tmp_path / "nohome")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    (tmp_path / "r.yml").write_text("title: x\n")
+    (tmp_path / "l.jsonl").write_text("{}\n")
+    return good, other, cfg
+
+
+def _backtest_args(tmp_path, *extra):
+    return [
+        "backtest",
+        "--rules",
+        str(tmp_path / "r.yml"),
+        "--attack-corpus",
+        str(tmp_path),
+        "--technique-map",
+        str(tmp_path / "tm.json"),
+        "--benign-sample",
+        str(tmp_path / "b.jsonl"),
+        *extra,
+    ]
+
+
+def _capture_backtest(monkeypatch):
+    seen = {}
+
+    def fake_pipeline(pcfg):
+        seen["engine_home"] = pcfg.engine_home
+        raise AssertionError("stop here")
+
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", fake_pipeline)
+    return seen
+
+
+def test_backtest_engine_home_from_flag_config_and_env(cli_rig, tmp_path, monkeypatch):
+    good, other, cfg = cli_rig
+    seen = _capture_backtest(monkeypatch)
+    # flag beats env
+    monkeypatch.setenv("SIGMAFORGE_HOME", str(other))
+    res = CliRunner().invoke(app, _backtest_args(tmp_path, "--config", str(cfg), "--engine-home", str(good)))
+    assert res.exit_code == 5 and seen["engine_home"] == str(good)
+    # env alone
+    res = CliRunner().invoke(app, _backtest_args(tmp_path, "--config", str(cfg)))
+    assert res.exit_code == 5 and seen["engine_home"] == str(other)
+    # config beats env
+    monkeypatch.delenv("SIGMAFORGE_HOME")
+    cfg2 = tmp_path / "c2.yaml"
+    cfg2.write_text(f"backtest:\n  engine_home: {good}\n")
+    res = CliRunner().invoke(app, _backtest_args(tmp_path, "--config", str(cfg2)))
+    assert res.exit_code == 5 and seen["engine_home"] == str(good)
+
+
+def _hunt(tmp_path, cfg, *extra):
+    return CliRunner().invoke(
+        app,
+        ["hunt", "--rules", str(tmp_path / "r.yml"), "--logs", str(tmp_path / "l.jsonl")]
+        + ["--out", str(tmp_path / "hits.json"), "--config", str(cfg), *extra],
+    )
+
+
+def test_hunt_engine_home_from_config_and_env(cli_rig, tmp_path, monkeypatch):
+    import sigmaforge.ingest.compile as compile_mod
+    import sigmaforge.ingest.zircolite_runner as runner_mod
+
+    good, other, cfg = cli_rig
+    seen = {}
+
+    def fake_compile(paths, engine_home=None):
+        seen["compile"] = engine_home
+        return [], 0
+
+    def fake_run_shard(*args, **kwargs):
+        seen["run_shard"] = kwargs.get("engine_home")
+        return []
+
+    monkeypatch.setattr(compile_mod, "compile_ruleset", fake_compile)
+    monkeypatch.setattr(runner_mod, "run_shard", fake_run_shard)
+    cfg2 = tmp_path / "c2.yaml"
+    cfg2.write_text(f"backtest:\n  engine_home: {good}\n")
+    assert _hunt(tmp_path, cfg2).exit_code == 0
+    assert seen == {"compile": str(good), "run_shard": str(good)}
+    monkeypatch.setenv("SIGMAFORGE_HOME", str(other))
+    assert _hunt(tmp_path, cfg).exit_code == 0
+    assert seen == {"compile": str(other), "run_shard": str(other)}
+
+
+def test_empty_engine_home_flag_is_invalid_not_unset(cli_rig, tmp_path, monkeypatch):
+    good, _other, cfg = cli_rig
+    monkeypatch.setenv("SIGMAFORGE_HOME", str(good))
+    monkeypatch.chdir(good)
+    res = _hunt(tmp_path, cfg, "--engine-home", "")
+    assert res.exit_code == 3 and "Traceback" not in res.output
+    res = CliRunner().invoke(app, _backtest_args(tmp_path, "--config", str(cfg), "--engine-home", ""))
+    assert res.exit_code == 3 and "Traceback" not in res.output
+
+
+def test_engine_refusal_during_compile_is_a_teaching_exit_3(cli_rig, tmp_path, monkeypatch):
+    import sigmaforge.ingest.compile as compile_mod
+    from sigmaforge.engine import EngineNotFoundError
+
+    good, _other, cfg = cli_rig
+
+    def refuse(paths, engine_home=None):
+        raise EngineNotFoundError("zircolite was already imported from [elsewhere]")
+
+    monkeypatch.setattr(compile_mod, "compile_ruleset", refuse)
+    res = _hunt(tmp_path, cfg, "--engine-home", str(good))
+    assert res.exit_code == 3 and "Traceback" not in res.output
+    assert "already imported" in " ".join(res.output.split())
+
+
+def test_backtest_engine_refusal_is_exit_3(cli_rig, tmp_path, monkeypatch):
+    from sigmaforge.engine import EngineNotFoundError
+
+    good, _other, cfg = cli_rig
+
+    def refuse(pcfg):
+        raise EngineNotFoundError("engine refused")
+
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", refuse)
+    res = CliRunner().invoke(app, _backtest_args(tmp_path, "--config", str(cfg), "--engine-home", str(good)))
+    assert res.exit_code == 3 and "Traceback" not in res.output
+
+
+def test_provenance_uses_explicit_then_env_engine_home(tmp_path, monkeypatch):
+    from sigmaforge import provenance as prov
+
+    good = _fake_engine(tmp_path / "good", "GOOD").resolve()
+    other = tmp_path / "other"
+    seen = []
+    monkeypatch.setattr(prov, "_git", lambda repo, *a: seen.append(Path(repo)) or "sha")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    prov.engine_provenance(engine_home=other)
+    assert set(seen) == {other / "Zircolite"}
+    seen.clear()
+    monkeypatch.setenv("SIGMAFORGE_HOME", str(good))
+    prov.engine_provenance()
+    assert set(seen) == {good / "Zircolite"}
+    seen.clear()
+    monkeypatch.delenv("SIGMAFORGE_HOME")
+    out = prov.engine_provenance()
+    assert seen == [] and "unavailable" in out["zircolite_commit_sha"]

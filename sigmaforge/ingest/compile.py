@@ -36,6 +36,19 @@ def _ensure_engine_on_path(home: Path) -> None:
         sys.path.insert(0, engine)
 
 
+def _refuse_foreign_zircolite(engine: Path) -> None:
+    """Raise if any already-imported `zircolite` / `zircolite.*` module (including a
+    namespace package) lives outside the engine dir — BEFORE anything is imported from it.
+    Both sides are compared resolved, so a symlinked `Zircolite/` is fine."""
+    for name, mod in list(sys.modules.items()):
+        if name != "zircolite" and not name.startswith("zircolite."):
+            continue
+        locations = [getattr(mod, "__file__", None), *list(getattr(mod, "__path__", None) or [])]
+        for loc in filter(None, locations):
+            if not Path(loc).resolve().is_relative_to(engine):
+                raise EngineNotFoundError(f"{name} was already imported from {loc}, not from {engine}")
+
+
 def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) -> tuple[list[dict], int]:
     """Convert exactly `paths` through Zircolite's pySigma sqlite backend.
 
@@ -45,13 +58,15 @@ def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) ->
     already imported from anywhere else is refused (EngineNotFoundError).
     """
     home = require_engine_home(engine_home)
+    engine = (home / "Zircolite").resolve()
+    _refuse_foreign_zircolite(engine)
     _ensure_engine_on_path(home)
     from zircolite import config as zconfig
     from zircolite.config import RulesetConfig
     from zircolite.rules import RulesetHandler
 
-    if not Path(zconfig.__file__).resolve().is_relative_to(home / "Zircolite"):
-        raise EngineNotFoundError(f"zircolite was already imported from {zconfig.__file__}, not from {home}/Zircolite")
+    if not Path(zconfig.__file__).resolve().is_relative_to(engine):
+        raise EngineNotFoundError(f"zircolite was imported from {zconfig.__file__}, not from {engine}")
 
     logger = logging.getLogger("compile_loaded_ruleset")
     logging.basicConfig(level=logging.INFO, format="%(message)s")

@@ -26,8 +26,10 @@ def resolve_engine_home(explicit: str | Path | None = None) -> Path | None:
     """Absolute engine root containing ``Zircolite/zircolite.py``, or None.
 
     Precedence: ``explicit`` (CLI flag, else config value) > ``$SIGMAFORGE_HOME`` > None.
-    An explicit wrong path is NOT retried elsewhere (it must fail, not fall back)."""
-    if explicit:
+    An explicit wrong (or empty) path is NOT retried elsewhere (it must fail, not fall back)."""
+    if explicit is not None:
+        if not str(explicit).strip():
+            return None  # an explicit empty value is invalid, never "the current directory"
         root = Path(explicit)
     else:
         env = os.environ.get("SIGMAFORGE_HOME")
