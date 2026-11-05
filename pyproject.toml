@@ -21,6 +21,12 @@ dependencies = [
 [tool.shipwright]
 preset = "security"
 
+[project.urls]
+Homepage = "https://github.com/duathron/sigmaforge"
+Repository = "https://github.com/duathron/sigmaforge"
+Issues = "https://github.com/duathron/sigmaforge/issues"
+Changelog = "https://github.com/duathron/sigmaforge/blob/main/CHANGELOG.md"
+
 [project.scripts]
 sigmaforge = "sigmaforge.main:main"
 
