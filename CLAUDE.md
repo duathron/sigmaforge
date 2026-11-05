@@ -5,7 +5,7 @@ CLI tool: Honest Sigma-rule backtest harness. Built with the Shipwright framewor
 ## Rules
 - All code, commits, docs in English.
 - Architecture: Typer CLI, Pydantic v2 models, Rich output (package under `sigmaforge/`).
-- Config hierarchy: CLI flags > env (`SIGMAFORGE_*`) > `~/.sigmaforge/config.yaml` > defaults.
+- Config hierarchy: flags > config file (`--config` or `~/.sigmaforge/config.yaml`) > defaults; the engine root resolves `--engine-home` > config `backtest.engine_home` > `$SIGMAFORGE_HOME` (no current-directory fallback).
 - `__version__` is a literal (never importlib.metadata — stale on editable installs).
 
 ## Quality policy (from Shipwright — enforced)

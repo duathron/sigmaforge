@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -75,6 +76,8 @@ def load_loaded_rules() -> list[dict]:
 
 
 def main() -> int:
+    # The engine is never taken from the current directory; these scripts run from this checkout.
+    os.environ.setdefault("SIGMAFORGE_HOME", str(REPO))
     loaded = load_loaded_rules()
     print(f"[loaded] {len(loaded)} high+critical stateless process_creation rules", flush=True)
 

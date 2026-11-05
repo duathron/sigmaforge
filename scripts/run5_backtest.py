@@ -30,6 +30,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -97,6 +98,8 @@ def load_loaded_rules() -> list[dict]:
 
 
 def main() -> int:
+    # The engine is never taken from the current directory; these scripts run from this checkout.
+    os.environ.setdefault("SIGMAFORGE_HOME", str(REPO))
     if not Path(COMPILED_RULESET).exists():
         print(f"[FATAL] {COMPILED_RULESET} missing. Run scripts/compile_loaded_ruleset.py first.", flush=True)
         return 2

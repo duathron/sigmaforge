@@ -25,8 +25,9 @@ backtest*).
 ## Quickstart
 
 ```bash
-# 1. fetch the engine (not bundled — large third-party tool)
+# 1. fetch the engine (not bundled — large third-party tool), then name it
 bash scripts/setup_engine.sh
+export SIGMAFORGE_HOME="$PWD"      # the directory that CONTAINS Zircolite/ (or pass --engine-home)
 
 # 2. hunt: rules over ANY logs -> hits only (no corpora needed)
 sigmaforge hunt --rules my_rules/ --logs /path/to/logs --out hits.json
@@ -51,7 +52,8 @@ quality measurement.
 | `--rules` | yes | — | Source Sigma rules (`.yml` file OR dir) |
 | `--logs` | yes | — | Logs to hunt over (EVTX/XML or JSON, file OR dir) |
 | `--out` | no | `hits.json` | Hits output path |
-| `--config` | no | discovery | Path to a config YAML (engine override) |
+| `--engine-home` | no | config / `$SIGMAFORGE_HOME` | Engine root containing `Zircolite/zircolite.py` |
+| `--config` | no | `~/.sigmaforge/config.yaml` | Path to a config YAML (engine override) |
 
 Output `hits.json`: `{"banner": "hits only — NOT a quality measurement …",
 "precision": "unmeasured — unlabeled corpus", "recall": "unmeasured — unlabeled
@@ -73,7 +75,7 @@ inputs is refused.
 | `--benign-sample` | from config | Benign corpus JSONL (precision) |
 | `--comiset-mapping` | from config | COMISET `_source` → Sigma field mapping YAML |
 | `--engine-home` | from config / `$SIGMAFORGE_HOME` | Engine root containing `Zircolite/zircolite.py` |
-| `--config` | discovery | Path to a config YAML |
+| `--config` | `~/.sigmaforge/config.yaml` | Path to a config YAML |
 | `--out` | `reports/run.md` | Report output path |
 | `--floor` | config / `1000` | Override the precision scoring floor |
 
@@ -89,7 +91,7 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 |------|---------|
 | 0 | success |
 | 2 | usage error (bad/missing flags) |
-| 3 | engine not found — run `scripts/setup_engine.sh` (or set `--engine-home` / `$SIGMAFORGE_HOME`) |
+| 3 | engine not found or `--engine-home` / `engine_home` empty — run `scripts/setup_engine.sh` (then `--engine-home`, config `engine_home` or `$SIGMAFORGE_HOME`) |
 | 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora |
 | 5 | acceptance gate FAILED (engine fires ≠ scored fires) |
 
@@ -114,22 +116,52 @@ exist at all).
 ## Configuration (`sigmaforge.yaml`)
 
 Config resolution: exactly **one** config file is loaded — the **first that exists**, in
-order `--config <path>`, then `~/.sigmaforge/config.yaml`, then `./config.yaml`
-(first-found wins; the files are **not** merged). Individual CLI flags then override
-single values from that file, and built-in defaults (`None`, `floor` 1000) sit
-underneath. The defaults bake no repo paths into the package, so outside the repo you
-must point the config or flags at your corpora.
+order `--config <path>`, then `~/.sigmaforge/config.yaml` (first-found wins; the files are
+**not** merged). A `config.yaml` in the current directory is **not** read. Individual CLI
+flags then override single values from that file, and built-in defaults (`None`, `floor`
+1000) sit underneath. The defaults bake no repo paths into the package, so outside the
+repo you must point the config or flags at your corpora.
+
+**Paths in a config file** — all six (`rules`, `attack_corpus`, `technique_map`,
+`benign_sample`, `comiset_mapping`, `engine_home`) are resolved relative to the directory
+of that config file, with `~` expanded; the current directory plays no part. Absolute
+paths are used as they are. (Flags such as `--rules` are ordinary command-line paths,
+relative to where you run the command.)
 
 ```yaml
 backtest:
+  # relative values below resolve against THIS file's directory
   rules: data/rulesets/sigmaforge_loaded.json   # .json = pre-compiled; a dir/.yml is auto-compiled
   attack_corpus: ~/sigmaforge-v0/attack_data_corpus
   technique_map: data/comiset/attack_data_technique_map.json
   benign_sample: data/comiset/combined_optc_benign_sample.jsonl
   comiset_mapping: data/mappings/comiset.yaml
-  engine_home: .            # dir containing Zircolite/  (else $SIGMAFORGE_HOME or cwd)
+  engine_home: ~/engine     # dir containing Zircolite/  (else $SIGMAFORGE_HOME; never the cwd)
   floor: 1000               # precision coverage floor
 ```
+
+## Where the engine comes from
+
+The engine (Zircolite) is third-party code that sigmaforge executes and imports, so it
+is taken only from a place **you name** — never from the current directory.
+
+1. `--engine-home <dir>` (flag, `hunt` and `backtest`)
+2. `backtest.engine_home` in the config file (relative to that file, `~` expanded)
+3. `$SIGMAFORGE_HOME`
+
+`<dir>` is the directory that **contains** `Zircolite/zircolite.py`. The first source that
+is set wins and is not retried elsewhere: a path without the engine, or an empty value
+(`--engine-home ""`, `engine_home: ""`), exits 3; the environment variable is not used as
+a fallback for it.
+
+`SIGMAFORGE_ZIRCOLITE` is an optional override of the interpreter prefix only (default:
+the Python running sigmaforge); the absolute path of the engine script is always
+appended, and the engine runs with its own root as working directory.
+
+**Trust boundary.** The engine path, `SIGMAFORGE_HOME` and `SIGMAFORGE_ZIRCOLITE` are
+treated as your own trusted environment: whatever they point at is executed with your
+privileges. A relative `SIGMAFORGE_HOME` resolves against the current directory, so
+prefer an absolute path. Do not set them from untrusted input.
 
 ## Reproduce a backtest
 
@@ -141,9 +173,13 @@ uv sync --group backtest        # script deps (pyyaml, evtx, gdown)
 bash scripts/setup_engine.sh    # fetch Zircolite 3.7.6 + its runtime deps
 ```
 
+Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact `uv sync`
+uninstalls the engine's dependencies again (re-run the script if you do).
+
 Then obtain the corpora (see the README table) into `~/sigmaforge-v0/`, build the
 combined samples with the `scripts/build_*` helpers, and run `sigmaforge backtest`
-(or the `scripts/run*_backtest.py` runs, which call the **same** `sigmaforge.pipeline`).
+(or the `scripts/run*_backtest.py` runs, which call the **same** `sigmaforge.pipeline`;
+they use this checkout as the engine root when `SIGMAFORGE_HOME` is unset).
 The committed `reports/run*.md` are inspectable without running anything.
 
 ## Comparing runs across systems

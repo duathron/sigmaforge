@@ -108,6 +108,9 @@ uv sync --group backtest          # script deps (pyyaml, evtx, gdown)
 bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 + its runtime deps
 ```
 
+Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact
+`uv sync` uninstalls the engine's dependencies again (re-run the script if you do).
+
 Then obtain the corpora (see the table above) into `~/sigmaforge-v0/` and build the
 combined samples with the `scripts/build_*_benign.py` / `scripts/build_*_corpus.py`
 helpers, compile the ruleset, and run a backtest:
@@ -117,10 +120,27 @@ uv run python scripts/compile_loaded_ruleset.py   # SigmaHQ rules -> one Zircoli
 uv run python scripts/run7_backtest.py            # -> reports/run7.md (+ manifest)
 ```
 
-Run scripts from the repo root (the engine working dir defaults to the current
-directory; override with `SIGMAFORGE_HOME` if you keep `Zircolite/` elsewhere). The
-`reports/run*.md` + `*_manifest.json` are committed so the results are inspectable
-without re-running.
+The `scripts/run*_backtest.py` and `scripts/compile_loaded_ruleset.py` helpers use
+this checkout as the engine root when `SIGMAFORGE_HOME` is unset (the `Zircolite/` that
+`setup_engine.sh` cloned next to them); set `SIGMAFORGE_HOME` to use an engine kept
+elsewhere. The `reports/run*.md` + `*_manifest.json` are committed so the results are
+inspectable without re-running.
+
+### Where the engine comes from
+
+The `sigmaforge` CLI never searches the current directory for an engine. It uses, in
+order: `--engine-home`, then `backtest.engine_home` from the config file, then
+`$SIGMAFORGE_HOME`; a value that does not contain `Zircolite/zircolite.py` (or an empty
+`--engine-home` / `engine_home: ""`) is an error (exit 3), never a fallback. The engine is
+third-party code that runs with your privileges, so the engine path, `SIGMAFORGE_HOME`
+and `SIGMAFORGE_ZIRCOLITE` are part of your trusted environment: do not point them at
+directories you did not set up (a relative `SIGMAFORGE_HOME` resolves against the current
+directory). `SIGMAFORGE_ZIRCOLITE` only replaces the interpreter prefix of the engine
+command (default: the Python running sigmaforge); the absolute engine script path is
+always appended. Config files come from `--config` or `~/.sigmaforge/config.yaml`; a
+`config.yaml` in the current directory is not read. Every path in a config file (`rules`,
+`attack_corpus`, `technique_map`, `benign_sample`, `comiset_mapping`, `engine_home`) is
+resolved relative to that file, with `~` expanded. See the manual (`sigmaforge manual`).
 
 ## Development
 

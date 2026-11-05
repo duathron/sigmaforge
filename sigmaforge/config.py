@@ -1,4 +1,7 @@
-"""sigmaforge configuration: ~/.sigmaforge/config.yaml + env > defaults."""
+"""sigmaforge configuration: --config file > ~/.sigmaforge/config.yaml > defaults.
+
+The current directory is not a config source. Every path-valued ``backtest`` key in a
+config file resolves relative to that file's directory (``~`` expanded)."""
 
 from __future__ import annotations
 
