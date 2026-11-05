@@ -426,6 +426,22 @@ def test_symlinked_zircolite_dir_works(pkg_rig, tmp_path):
     assert sys.modules["zircolite.config"].ORIGIN == "GOOD"
 
 
+def test_symlinked_engine_home_compiles_twice_in_one_process(pkg_rig, tmp_path):
+    # the 2nd call finds `zircolite` already imported VIA the symlink path; the pre-import
+    # scan must compare resolved paths or it would refuse its own engine.
+    from sigmaforge.ingest.compile import compile_ruleset
+
+    good, _evil, _marker = pkg_rig
+    home = tmp_path / "linkhome"
+    home.mkdir()
+    os.symlink(good / "Zircolite", home / "Zircolite")
+    rule = tmp_path / "a.yml"
+    rule.write_text("title: a\n")
+    first = compile_ruleset([rule], engine_home=home)
+    assert "linkhome" in sys.modules["zircolite"].__file__  # imported through the symlink
+    assert compile_ruleset([rule], engine_home=home) == first
+
+
 def test_resolve_engine_home_explicit_forms(tmp_path, monkeypatch):
     from sigmaforge.engine import resolve_engine_home
 
