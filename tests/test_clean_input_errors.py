@@ -1382,7 +1382,6 @@ def _out_shapes(tmp_path):
         "readonly_dir": (ro / "r.md", "not writable"),
         "under_a_file": (f / "sub" / "r.md", "not writable"),
         "long_name": (tmp_path / ("n" * 5000), "not writable"),
-        "invalid_utf8_name": (Path(os.fsdecode(bytes(tmp_path) + b"/bad\xff\xfe.md")), None),
         "readonly_existing_report": (rof, "not writable"),
         "manifest_sibling_is_dir": (tmp_path / "m.md", "is a directory"),
     }
@@ -1394,8 +1393,7 @@ from pathlib import Path  # noqa: E402
 @pytest.mark.skipif(os.geteuid() == 0 if hasattr(os, "geteuid") else True, reason="needs a non-root POSIX user")
 @pytest.mark.parametrize(
     "shape",
-    ["directory", "readonly_dir", "under_a_file", "long_name", "invalid_utf8_name",
-     "readonly_existing_report", "manifest_sibling_is_dir"],
+    ["directory", "readonly_dir", "under_a_file", "long_name", "readonly_existing_report", "manifest_sibling_is_dir"],
 )  # fmt: skip
 def test_unusable_backtest_out_is_refused_before_the_run(tmp_path, engine_calls, shape):
     (tmp_path / "m.manifest.json").mkdir()
@@ -1531,3 +1529,15 @@ def test_plain_safe_shows_lone_surrogates_as_an_escape():
     assert plain_safe("a\udcffb") == "a\\udcffb"
     assert plain_safe_capped("a\udcffb") == "a\\udcffb"
     plain_safe("a\udcffb").encode("utf-8")
+
+
+def test_out_with_an_invalid_utf8_name_never_crashes_the_message(tmp_path, engine_calls):
+    """macOS refuses such a name (clean exit-2 line); Linux accepts it (the run succeeds). Either way the
+    output must be printable text, never a traceback."""
+    out = Path(os.fsdecode(bytes(tmp_path) + b"/bad\xff\xfe.md"))
+    res = _bt_out(tmp_path, out)
+    assert res.exception is None or isinstance(res.exception, SystemExit), repr(res.exception)
+    assert res.exit_code in (0, 2) and "Traceback" not in res.output
+    res.output.encode("utf-8")  # no lone surrogate reached the terminal
+    if res.exit_code == 2:
+        assert "Cannot write output" in res.output and len(res.output.strip().splitlines()) == 1
