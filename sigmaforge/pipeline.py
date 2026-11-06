@@ -32,7 +32,7 @@ from sigmaforge.orchestrate import run_backtest
 from sigmaforge.provenance import provenance
 from sigmaforge.records import MatchRecord
 from sigmaforge.runmanifest import build_manifest, run_hash
-from sigmaforge.safe_read import ReadRefused, iter_lines_capped, read_capped
+from sigmaforge.safe_read import ReadRefused, iter_lines_capped, open_regular, read_capped
 from sigmaforge.score.acceptance import GateResult, assert_one_source
 from sigmaforge.score.recall import rule_techniques
 
@@ -74,18 +74,34 @@ class BacktestResult:
     loaded_rule_count: int
 
 
-def _sha256_file(path: str | Path) -> str:
+def _sha256_file(path: str | Path, cap: int, what: str) -> str:
+    """SHA-256 of a regular file of at most `cap` bytes, streamed through the safe reader."""
     h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
+    try:
+        with open_regular(path, cap) as fh:
+            seen = 0
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                seen += len(chunk)
+                if seen > cap:
+                    raise ReadRefused("too large")
+                h.update(chunk)
+    except ReadRefused as e:
+        raise InputLoadError(path, what, e.reason) from None
+    except OSError:
+        raise InputLoadError(path, what, "unreadable") from None
     return h.hexdigest()
 
 
 #: Size caps per user-supplied input (refused as "too large" beyond these).
-TECHNIQUE_MAP_MAX_BYTES = 64 * 1024 * 1024
+#: A parsed document costs memory far beyond its bytes (a 100 MB benign sample is ~1.2 GB of dicts,
+#: nested empty lists ~25x), so the byte caps are sized to the real data with ample headroom: the
+#: largest real benign sample has 97,400 events, technique maps are kilobytes.
+TECHNIQUE_MAP_MAX_BYTES = 8 * 1024 * 1024
 COMISET_MAPPING_MAX_BYTES = 1024 * 1024
-BENIGN_SAMPLE_MAX_BYTES = 1024 * 1024 * 1024
+BENIGN_SAMPLE_MAX_BYTES = 256 * 1024 * 1024
+BENIGN_SAMPLE_MAX_EVENTS = 500_000  # scripts/build_benign_sample.py scans at most 5M raw lines (EID-1 subset)
+RULE_FILE_MAX_BYTES = 1024 * 1024
+RULESET_HASH_MAX_BYTES = 64 * 1024 * 1024
 
 
 class InputLoadError(ValueError):
@@ -184,6 +200,8 @@ def _load_benign_sample(path: str, field_map: dict[str, str]) -> list[dict]:
             ev = _project_event(src, field_map)
             ev["sigmaforge_label"] = src.get("sigmaforge_label", "benign")
             events.append(ev)
+            if len(events) > BENIGN_SAMPLE_MAX_EVENTS:
+                raise InputLoadError(path, what, "too many events")
     except ReadRefused as e:
         raise InputLoadError(path, what, e.reason) from None
     return events
@@ -200,10 +218,12 @@ def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
     rules = []
     for f in glob.glob(loaded_rules_glob):
         try:
-            with open(f) as fh:
-                for doc in yaml.safe_load_all(fh):
-                    if doc:
-                        rules.append(doc)
+            text = read_capped(f, RULE_FILE_MAX_BYTES).decode("utf-8")
+            for doc in yaml.safe_load_all(text):
+                if doc:
+                    rules.append(doc)
+        except ReadRefused as e:
+            raise RuleLoadError(f, e.reason) from None
         except yaml.YAMLError:
             raise RuleLoadError(f, "invalid YAML") from None
         except (OSError, ValueError):  # unreadable, or not valid text
@@ -289,18 +309,18 @@ def run_backtest_pipeline(cfg: PipelineConfig) -> BacktestResult:
     manifest = build_manifest(
         recommended_precision_floor=max(200, int(0.10 * len(benign_events))),
         ruleset_path=str(cfg.compiled_ruleset),
-        ruleset_sha=_sha256_file(cfg.compiled_ruleset),
+        ruleset_sha=_sha256_file(cfg.compiled_ruleset, RULESET_HASH_MAX_BYTES, "ruleset"),
         loaded_rule_count=len(loaded),
         mapping_path=str(cfg.comiset_mapping),
-        mapping_hash=_sha256_file(cfg.comiset_mapping),
+        mapping_hash=_sha256_file(cfg.comiset_mapping, COMISET_MAPPING_MAX_BYTES, "COMISET mapping"),
         precision_floor=cfg.min_events,
         benign_corpus_path=str(cfg.benign_sample),
-        benign_corpus_sha=_sha256_file(cfg.benign_sample),
+        benign_corpus_sha=_sha256_file(cfg.benign_sample, BENIGN_SAMPLE_MAX_BYTES, "benign sample"),
         benign_eid1_total=len(benign_events),
         benign_label_split={"benign": n_ben, "malicious": n_mal},
         attack_process_creation_events=n_pc,
         recall_technique_map=str(cfg.technique_map),
-        recall_technique_map_sha=_sha256_file(cfg.technique_map),
+        recall_technique_map_sha=_sha256_file(cfg.technique_map, TECHNIQUE_MAP_MAX_BYTES, "technique map"),
         rules_with_technique_tag=n_tagged,
         rules_recall_measurable=n_measurable,
         rules_recall_unmeasured=n_unmeasured,

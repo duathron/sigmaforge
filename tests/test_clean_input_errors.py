@@ -54,10 +54,13 @@ def _inputs(tmp_path):
 
 
 def _backtest(tmp_path, ins, *extra, config=None):
+    rules = tmp_path / "ok-rules.yml"
+    rules.write_text("title: t\nlevel: low\n")  # a real file: the manifest hashes the ruleset
     args = [
-        "backtest", "--rules", str(tmp_path / "no-rules-*.yml"), "--attack-corpus", str(tmp_path),
+        "backtest", "--rules", str(rules), "--attack-corpus", str(tmp_path),
         "--technique-map", str(ins["tm"]), "--benign-sample", str(ins["bs"]),
-        "--comiset-mapping", str(ins["cm"]), "--engine-home", str(_engine(tmp_path)), *extra,
+        "--comiset-mapping", str(ins["cm"]), "--engine-home", str(_engine(tmp_path)),
+        "--out", str(tmp_path / "run.md"), *extra,
     ]  # fmt: skip
     if config is not None:
         args += ["--config", str(config)]
@@ -486,3 +489,244 @@ def test_iter_lines_never_asks_readline_for_more_than_the_remaining_budget(monke
     monkeypatch.setattr(safe_read, "open_regular", fake_open)
     assert list(safe_read.iter_lines_capped("p", 100)) == [b"ab\n", b"cd\n"]
     assert asked and all(0 < n <= 101 for n in asked)
+
+
+# --- fix round 3: parsed-size bounds, rule files through the safe reader, pinned branches ------
+
+
+def test_caps_are_the_documented_sane_values():
+    from sigmaforge import config, pipeline
+
+    mib = 1024 * 1024
+    assert config.CONFIG_MAX_BYTES == 1 * mib
+    assert pipeline.COMISET_MAPPING_MAX_BYTES == 1 * mib
+    assert pipeline.TECHNIQUE_MAP_MAX_BYTES == 8 * mib
+    assert pipeline.BENIGN_SAMPLE_MAX_BYTES == 256 * mib
+    assert pipeline.BENIGN_SAMPLE_MAX_EVENTS == 500_000
+    assert pipeline.RULE_FILE_MAX_BYTES == 1 * mib
+
+
+def test_benign_sample_event_count_cap(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    ins["bs"].write_bytes(b'{"_source": {"a": 1}}\n' * 4)
+    monkeypatch.setattr("sigmaforge.pipeline.BENIGN_SAMPLE_MAX_EVENTS", 4)
+    assert "Cannot load" not in _backtest(tmp_path, ins).output
+    monkeypatch.setattr("sigmaforge.pipeline.BENIGN_SAMPLE_MAX_EVENTS", 3)
+    _assert_clean(_backtest(tmp_path, ins), 4, "too many events")
+
+
+def test_cap_sized_hostile_technique_map_finishes_with_one_line(tmp_path):
+    from sigmaforge import pipeline
+
+    ins = _inputs(tmp_path)
+    body = b"[" + b"[]," * (pipeline.TECHNIQUE_MAP_MAX_BYTES // 3 - 2) + b"[]]"
+    assert len(body) <= pipeline.TECHNIQUE_MAP_MAX_BYTES
+    ins["tm"].write_bytes(body)
+    r = _cli_subprocess(tmp_path, ins, timeout=120)
+    assert r.returncode == 4 and "malformed" in r.stdout and "Traceback" not in r.stdout + r.stderr
+    assert len(r.stdout.strip().splitlines()) == 1
+
+
+def test_technique_map_one_byte_over_the_cap_is_refused(tmp_path):
+    from sigmaforge import pipeline
+
+    ins = _inputs(tmp_path)
+    ins["tm"].write_bytes(b" " * (pipeline.TECHNIQUE_MAP_MAX_BYTES + 1))
+    _assert_clean(_backtest(tmp_path, ins), 4, "too large")
+
+
+# H2: rule files
+
+
+def _rules_cli(tmp_path, rules_arg, timeout=20):
+    ins = _inputs(tmp_path)
+    args = [
+        sys.executable, "-m", "sigmaforge.main", "backtest", "--rules", str(rules_arg),
+        "--attack-corpus", str(tmp_path), "--technique-map", str(ins["tm"]), "--benign-sample", str(ins["bs"]),
+        "--comiset-mapping", str(ins["cm"]), "--engine-home", str(_engine(tmp_path)),
+    ]  # fmt: skip
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "COLUMNS": "300"}
+    env.pop("SIGMAFORGE_HOME", None)
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+@posix_only
+def test_fifo_as_rules_argument_is_refused_not_hung(tmp_path):
+    r = _rules_cli(tmp_path, _fifo(tmp_path, "r.yml"))
+    assert r.returncode == 4, (r.stdout, r.stderr)
+    assert "Cannot load rule file" in r.stdout and "not a regular file" in r.stdout
+    assert "Traceback" not in r.stdout + r.stderr
+
+
+@posix_only
+def test_fifo_matched_by_the_rules_glob_is_refused_not_hung(tmp_path):
+    d = tmp_path / "rules"
+    d.mkdir()
+    os.mkfifo(d / "a.yml")
+    r = _rules_cli(tmp_path, d / "*.yml")
+    assert r.returncode == 4, (r.stdout, r.stderr)
+    assert "not a regular file" in r.stdout and "Traceback" not in r.stdout + r.stderr
+
+
+def test_oversized_rule_file_is_refused(tmp_path, monkeypatch):
+    d = tmp_path / "rules"
+    d.mkdir()
+    (d / "a.yml").write_text("title: t\n" + "#" * 100)
+    monkeypatch.setattr("sigmaforge.pipeline.RULE_FILE_MAX_BYTES", 50)
+    ins = _inputs(tmp_path)
+    res = _backtest(tmp_path, ins)  # sanity: default glob matches nothing
+    assert "Cannot load rule file" not in res.output
+    args = ["backtest", "--rules", str(d / "*.yml"), "--attack-corpus", str(tmp_path),
+            "--technique-map", str(ins["tm"]), "--benign-sample", str(ins["bs"]),
+            "--engine-home", str(_engine(tmp_path))]  # fmt: skip
+    res = CliRunner().invoke(app, args, env={"COLUMNS": "300"})
+    assert res.exit_code == 4 and "Cannot load rule file" in res.output and "too large" in res.output
+
+
+@posix_only
+def test_sha256_file_refuses_a_fifo_without_hanging(tmp_path):
+    f = _fifo(tmp_path)
+    code = (
+        "import sys; from sigmaforge.pipeline import _sha256_file, InputLoadError\n"
+        "try:\n    _sha256_file(sys.argv[1], 10, 'x')\nexcept InputLoadError as e:\n    print('refused', e)\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code, str(f)], capture_output=True, text=True, timeout=20)
+    assert r.stdout.strip() == "refused not a regular file", (r.stdout, r.stderr)
+
+
+def test_sha256_file_hashes_a_regular_file_and_enforces_its_cap(tmp_path):
+    import hashlib
+
+    from sigmaforge.pipeline import InputLoadError, _sha256_file
+
+    f = tmp_path / "f"
+    f.write_bytes(b"abc" * 1000)
+    assert _sha256_file(f, 3000, "x") == hashlib.sha256(b"abc" * 1000).hexdigest()
+    with pytest.raises(InputLoadError, match="too large"):
+        _sha256_file(f, 2999, "x")
+
+
+# H3: pinned branches of the safe reader
+
+
+class _Fake:
+    """A file-like object that records the sizes it is asked for."""
+
+    def __init__(self, data=b"", fail=False):
+        import io
+
+        self._b, self.fail, self.asked = io.BytesIO(data), fail, []
+
+    def read(self, n=-1):
+        self.asked.append(n)
+        if self.fail:
+            raise OSError("boom")
+        return self._b.read(n)
+
+    def readline(self, n=-1):
+        self.asked.append(n)
+        if self.fail:
+            raise OSError("boom")
+        return self._b.readline(n)
+
+
+def _patch_open(monkeypatch, fake):
+    import contextlib
+
+    from sigmaforge import safe_read
+
+    @contextlib.contextmanager
+    def fake_open(path, cap):
+        yield fake
+
+    monkeypatch.setattr(safe_read, "open_regular", fake_open)
+    return safe_read
+
+
+def test_read_capped_asks_for_exactly_cap_plus_one(monkeypatch):
+    fake = _Fake(b"x" * 5)
+    sr = _patch_open(monkeypatch, fake)
+    sr.read_capped("p", 10)
+    assert fake.asked == [11]
+
+
+def test_iter_lines_budget_shrinks_with_every_line(monkeypatch):
+    fake = _Fake(b"ab\ncd\n")
+    sr = _patch_open(monkeypatch, fake)
+    assert list(sr.iter_lines_capped("p", 100)) == [b"ab\n", b"cd\n"]
+    assert fake.asked == [101, 98, 95]
+
+
+def test_stream_and_whole_read_oserror_are_unreadable(monkeypatch):
+    sr = _patch_open(monkeypatch, _Fake(fail=True))
+    with pytest.raises(sr.ReadRefused, match="unreadable"):
+        sr.read_capped("p", 10)
+    with pytest.raises(sr.ReadRefused, match="unreadable"):
+        list(sr.iter_lines_capped("p", 10))
+
+
+def test_open_oserror_is_unreadable(tmp_path, monkeypatch):
+    from sigmaforge import safe_read
+
+    def boom(*a, **k):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(safe_read.os, "open", boom)
+    with pytest.raises(safe_read.ReadRefused, match="unreadable"):
+        with safe_read.open_regular(tmp_path / "x", 10):
+            pass
+
+
+def test_explicit_config_exists_oserror_is_unreadable(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from sigmaforge import config
+
+    def boom(self):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(Path, "exists", boom)
+    with pytest.raises(config.ConfigError, match="unreadable"):
+        config.load(tmp_path / "c.yaml")
+
+
+@pytest.mark.parametrize("kind", ["non_regular", "too_large"])
+def test_descriptor_is_closed_when_the_file_is_refused(tmp_path, monkeypatch, kind):
+    from sigmaforge import safe_read
+
+    opened, closed = [], []
+    real_open, real_close = os.open, os.close
+
+    def spy_open(*a, **k):
+        fd = real_open(*a, **k)
+        opened.append(fd)
+        return fd
+
+    def spy_close(fd):
+        closed.append(fd)
+        return real_close(fd)
+
+    monkeypatch.setattr(safe_read.os, "open", spy_open)
+    monkeypatch.setattr(safe_read.os, "close", spy_close)
+    target = tmp_path if kind == "non_regular" else tmp_path / "big"
+    if kind == "too_large":
+        target.write_bytes(b"x" * 11)
+    with pytest.raises(safe_read.ReadRefused):
+        with safe_read.open_regular(target, 10):
+            pass
+    assert opened and opened == closed
+
+
+def test_sha256_file_enforces_the_cap_even_if_the_file_grows_after_fstat(monkeypatch):
+    import contextlib
+    import io
+
+    from sigmaforge import pipeline
+
+    @contextlib.contextmanager
+    def fake_open(path, cap):
+        yield io.BytesIO(b"x" * (cap + 1))
+
+    monkeypatch.setattr(pipeline, "open_regular", fake_open)
+    with pytest.raises(pipeline.InputLoadError, match="too large"):
+        pipeline._sha256_file("p", 10, "x")

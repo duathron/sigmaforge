@@ -96,7 +96,7 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 | 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora; also `backtest` when a rule file, the technique map, the benign sample or the COMISET mapping cannot be read or parsed (missing, not a regular file such as a FIFO or device, over the size cap, or malformed; one line naming the file; the file's contents are never echoed) |
 | 5 | acceptance gate FAILED (engine fires ≠ scored fires) |
 
-Input files are opened without blocking and read only if they are regular files within a size cap: config 1 MiB, COMISET mapping 1 MiB, technique map 64 MiB, benign sample 1 GiB; a larger file is refused as `too large`.
+Input files are opened without blocking and read only if they are regular files within a size cap, so a FIFO or a device (`/dev/zero`) is refused instead of hanging or filling memory. Caps: config 1 MiB, COMISET mapping 1 MiB, technique map 8 MiB, each Sigma rule file 1 MiB, benign sample 256 MiB and at most 500,000 events (more is refused as `too many events`); a larger file is refused as `too large`. A parsed document needs far more memory than its bytes (the benign sample is held in memory at roughly 12 times its file size), so keep samples well under the caps.
 
 Codes 3 and 4 are **teaching errors**: they name what to run and never print a
 traceback or an empty report.
