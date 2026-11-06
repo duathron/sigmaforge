@@ -11,7 +11,8 @@
 # requirements.txt against the lock, and only then renames the old directory aside
 # (Zircolite.old.<timestamp>, never deleted) and the new one into place. Dependencies are
 # installed from scripts/zircolite-requirements.lock with `--require-hashes`.
-# Leftovers: Zircolite.setup.* after a failed clone/verification, Zircolite.old.* whenever a previous Zircolite/ existed (both git-ignored).
+# Leftovers: Zircolite.setup.* after a failed clone/verification, Zircolite.old.* whenever a previous Zircolite/ existed, and
+# Zircolite.untrusted.* if the moved-in engine failed the final check (all git-ignored).
 # sigmaforge does not re-verify the engine at run time: this is a setup-time check only; whoever
 # can write to the engine directory afterwards can run code as you.
 set -euo pipefail
@@ -34,7 +35,7 @@ safe_git() {
 # verify_dir DIR: succeed only for a real directory (not a symbolic link) that is at the pinned
 # commit AND tree and whose requirements.txt matches the lock. Sets VERIFY_ERR on failure.
 verify_dir() {
-    local d="$1" h t want have
+    local d="$1" h t st want have
     VERIFY_ERR=""
     if [ -L "$d" ]; then
         VERIFY_ERR="$d is a symbolic link, not the verified clone"
@@ -44,6 +45,12 @@ verify_dir() {
     t="$(safe_git -C "$d" rev-parse 'HEAD^{tree}')"
     if [ "$h" != "$ZIRCOLITE_COMMIT" ] || [ "$t" != "$ZIRCOLITE_TREE" ]; then
         VERIFY_ERR="$d is at commit $h / tree $t, expected $ZIRCOLITE_COMMIT / $ZIRCOLITE_TREE"
+        return 1
+    fi
+    # A genuine clone with extra or modified files passes the commit/tree checks, so the working tree
+    # must be clean too: modified, untracked and ignored files all count (a fresh clone has none).
+    if ! st="$(safe_git -C "$d" status --porcelain --untracked-files=all --ignored)" || [ -n "$st" ]; then
+        VERIFY_ERR="the working tree of $d is not clean (modified, untracked or ignored files, or git status failed)"
         return 1
     fi
     want="$(sed -n 's/^# requirements-sha256: \([0-9a-f]\{64\}\)$/\1/p' "$LOCK" | head -n 1)"
@@ -86,9 +93,23 @@ mv "$NEW" "$DEST" || {
     exit 1
 }
 
-# Re-verify what is now at $DEST: the clone directory could have been swapped between the checks and the move.
+# Re-verify what is now at $DEST: the clone directory could have been swapped or tampered with between
+# the checks and the move. A rejected directory is quarantined (renamed, never deleted) and the
+# previous engine, if there was one, is put back.
 if ! verify_dir "$DEST"; then
-    echo "[setup] ERROR: after the move, $VERIFY_ERR. Nothing was installed. Your previous engine, if any, is at '${ASIDE:-}' (mv it back to '$DEST')." >&2
+    UNTRUSTED="$DEST.untrusted.$(date +%Y%m%d%H%M%S).$$"
+    mv "$DEST" "$UNTRUSTED"
+    echo "[setup] ERROR: after the move, $VERIFY_ERR. Nothing was installed." >&2
+    echo "[setup] The rejected copy was renamed to '$UNTRUSTED' (inspect it, then remove it yourself)." >&2
+    if [ -n "${ASIDE:-}" ]; then
+        if mv "$ASIDE" "$DEST"; then
+            echo "[setup] Your previous engine was restored to '$DEST' (it had been moved aside to '$ASIDE')." >&2
+        else
+            echo "[setup] Could NOT restore your previous engine: it is still at '$ASIDE' (mv it back to '$DEST')." >&2
+        fi
+    else
+        echo "[setup] There was no previous engine, so '$DEST' does not exist now." >&2
+    fi
     exit 1
 fi
 

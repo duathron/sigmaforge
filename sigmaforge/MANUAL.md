@@ -44,7 +44,7 @@ verified) and moves an existing `Zircolite/` aside to `Zircolite.old.<timestamp>
 re-verify the engine at run time; the check is setup-time only.
 Setup needs network access on every run. Leftovers: `Zircolite.setup.*` after a failed clone or
 verification and `Zircolite.old.*` whenever a previous `Zircolite/` existed (remove them yourself when
-not needed; both are git-ignored in the repository). The installed
+not needed; and `Zircolite.untrusted.*` when the moved-in engine fails the final check, in which case the previous engine is restored automatically; all are git-ignored in the repository). The installed
 `Zircolite/` directory gets mode 0755.
 
 ## Commands

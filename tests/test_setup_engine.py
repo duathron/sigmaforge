@@ -19,12 +19,23 @@ echo "git[GIT_DIR=${GIT_DIR-unset} WT=${GIT_WORK_TREE-unset}] $*" >> "$SHIM_LOG"
 cdir=""
 prev=""
 for a in "$@"; do [ "$prev" = "-C" ] && cdir="$a"; prev="$a"; done
+sub=""
+skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in -C|-c) skip=1 ;; -*) ;; *) sub="$a"; break ;; esac
+done
+if [ "$sub" = "status" ]; then
+  out="$("$SHIM_REAL_GIT" "$@")"; rc=$?
+  [ -n "$out" ] && echo "$out"
+  if [ -n "${SHIM_SWAP_TO:-}" ] && [ "$cdir" != "Zircolite" ]; then
+    /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
+  fi
+  exit $rc
+fi
 case "$*" in
   *'HEAD^{tree}'*)
     echo "$SHIM_TREE"
-    if [ -n "${SHIM_SWAP_TO:-}" ] && [ "$cdir" != "Zircolite" ]; then
-      /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
-    fi
     exit 0 ;;
   *rev-parse*)
     if [ "$cdir" = "Zircolite" ] && [ -n "${SHIM_HEAD_AFTER:-}" ]; then
@@ -35,10 +46,13 @@ case "$*" in
     exit 0 ;;
   *clone*)
     dest="${@: -1}"
-    mkdir -p "$dest/.git"
     printf 'orjson>=3.9.15\\n' > "$dest/requirements.txt"
     : > "$dest/zircolite.py"
     chmod 600 "$dest/zircolite.py"
+    [ -n "${SHIM_NO_REPO:-}" ] && exit 0
+    "$SHIM_REAL_GIT" -C "$dest" init -q
+    "$SHIM_REAL_GIT" -C "$dest" add -A
+    "$SHIM_REAL_GIT" -C "$dest" -c user.name=t -c user.email=t@t commit -q -m c
     exit 0 ;;
 esac
 exit 0
@@ -95,6 +109,7 @@ def _run(
         "SHIM_LOG": str(log),
         "SHIM_HEAD": head,
         "SHIM_TREE": tree,
+        "SHIM_REAL_GIT": shutil.which("git"),
         **(extra_env or {}),
     }
     res = subprocess.run(["bash", str(scripts / "setup_engine.sh")], cwd=work, env=env, capture_output=True, text=True)
@@ -268,11 +283,12 @@ def test_setup_engine_installed_directory_is_world_readable(tmp_path):
 
 def test_setup_leftovers_are_gitignored_and_documented():
     ignored = (ROOT / ".gitignore").read_text().splitlines()
-    assert "/Zircolite.old.*" in ignored and "/Zircolite.setup.*" in ignored
+    assert {"/Zircolite.old.*", "/Zircolite.setup.*", "/Zircolite.untrusted.*"} <= set(ignored)
     for doc in ("README.md", "sigmaforge/MANUAL.md"):
         text = (ROOT / doc).read_text()
         assert "Zircolite.setup." in text and "network" in text and "0755" in text, doc
         assert "whenever a previous" in text and "git-ignored" in text, doc
+        assert "Zircolite.untrusted." in text, doc
 
 
 def _mode(path):
@@ -350,3 +366,92 @@ def test_clone_swapped_for_a_symlink_between_chmod_and_move_is_refused_before_an
     assert res.returncode != 0 and "symbolic link" in res.stderr
     assert (work / "Zircolite" / "keep").exists() and not _uv_installs(log)
     assert not any(p.name.startswith("Zircolite.old.") for p in work.iterdir())  # nothing moved aside
+
+
+# --- round 4: quarantine a rejected engine, require a clean working tree -----------------------
+
+
+def _untrusted(work):
+    return [p for p in work.iterdir() if p.name.startswith("Zircolite.untrusted.")]
+
+
+def _old(d):
+    (d / "keep").write_text("mine")
+
+
+def test_rejected_final_engine_is_quarantined_and_the_previous_one_restored(tmp_path):
+    res, log, work = _run(tmp_path, existing=_old, extra_env={"SHIM_HEAD_AFTER": "9" * 40})
+    assert res.returncode != 0 and "after the move" in res.stderr and not _uv_installs(log)
+    assert (work / "Zircolite" / "keep").exists() and not (work / "Zircolite" / "zircolite.py").exists()
+    q = _untrusted(work)
+    assert len(q) == 1 and (q[0] / "zircolite.py").exists() and q[0].name in res.stderr
+    assert "restored" in res.stderr
+    assert not any(p.name.startswith("Zircolite.old.") for p in work.iterdir())  # moved back, not left aside
+
+
+def test_rejected_final_engine_without_a_previous_one_leaves_no_zircolite(tmp_path):
+    res, log, work = _run(tmp_path, extra_env={"SHIM_HEAD_AFTER": "9" * 40})
+    assert res.returncode != 0 and not _uv_installs(log)
+    assert not (work / "Zircolite").exists() and len(_untrusted(work)) == 1
+    assert "no previous engine" in res.stderr
+
+
+def test_symlink_swapped_in_during_the_move_is_quarantined_and_the_victim_untouched(tmp_path):
+    victim = _victim(tmp_path)
+
+    def swapping_mv(bindir):
+        (bindir / "mv").write_text(
+            "#!/bin/bash\n"
+            '/bin/mv "$@" || exit 1\n'
+            'n=$(cat "$SHIM_LOG.mv" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$SHIM_LOG.mv"\n'
+            f'if [ "$n" = 1 ]; then d=$(ls -d Zircolite.setup.*); /bin/mv "$d" "$d.real"; ln -s {victim} "$d"; fi\n'
+        )
+        (bindir / "mv").chmod(0o755)
+
+    res, log, work = _run(tmp_path, existing=_old, bin_hook=swapping_mv)
+    assert res.returncode != 0 and not _uv_installs(log) and "done" not in res.stdout
+    assert (work / "Zircolite" / "keep").exists() and not (work / "Zircolite").is_symlink()
+    q = _untrusted(work)
+    assert len(q) == 1 and q[0].is_symlink()
+    assert _mode(victim) == 0o700 and (victim / "requirements.txt").exists()
+
+
+def _tamper_after_first_mv(tmp_path, tamper):
+    def hook(bindir):
+        (bindir / "mv").write_text(
+            "#!/bin/bash\n"
+            '/bin/mv "$@" || exit 1\n'
+            'n=$(cat "$SHIM_LOG.mv" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$SHIM_LOG.mv"\n'
+            f'if [ "$n" = 1 ]; then d=$(ls -d Zircolite.setup.* | head -1); {tamper}; fi\n'
+        )
+        (bindir / "mv").chmod(0o755)
+
+    return _run(tmp_path, existing=_old, bin_hook=hook)
+
+
+def test_modified_tracked_file_in_the_moved_clone_is_refused(tmp_path):
+    res, log, work = _tamper_after_first_mv(tmp_path, 'echo evil > "$d/zircolite.py"')
+    assert res.returncode != 0 and not _uv_installs(log) and "not clean" in res.stderr
+    assert (work / "Zircolite" / "keep").exists() and len(_untrusted(work)) == 1
+
+
+def test_untracked_file_in_the_moved_clone_is_refused(tmp_path):
+    res, log, work = _tamper_after_first_mv(tmp_path, 'echo evil > "$d/evil.py"')
+    assert res.returncode != 0 and not _uv_installs(log) and "not clean" in res.stderr
+    assert (work / "Zircolite" / "keep").exists() and len(_untrusted(work)) == 1
+
+
+def test_ignored_file_in_the_moved_clone_is_refused(tmp_path):
+    res, log, work = _tamper_after_first_mv(tmp_path, 'echo "*.pyc" > "$d/.git/info/exclude"; echo y > "$d/hidden.pyc"')
+    assert res.returncode != 0 and not _uv_installs(log)
+
+
+def test_a_clean_real_git_clone_passes_the_working_tree_check(tmp_path):
+    res, log, work = _run(tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert any("status" in ln and "--untracked-files=all" in ln and "--ignored" in ln for ln in log.splitlines())
+
+
+def test_a_failing_git_status_is_a_refusal_not_a_pass(tmp_path):
+    res, log, work = _run(tmp_path, extra_env={"SHIM_NO_REPO": "1"})
+    assert res.returncode != 0 and not _uv_installs(log) and "not clean" in res.stderr

@@ -38,3 +38,4 @@ reports/_*_summary.json
 # setup_engine.sh leftovers (failed verification / previous engine moved aside)
 /Zircolite.old.*
 /Zircolite.setup.*
+/Zircolite.untrusted.*
