@@ -111,13 +111,19 @@ bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 (pinned commit, verifi
 Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact
 `uv sync` uninstalls the engine's dependencies again (re-run the script if you do).
 
-The script clones the pinned engine fresh on every run (commit and tree are checked, the
-requirements are hash-locked) and moves any existing `Zircolite/` aside to
-`Zircolite.old.<timestamp>` instead of trusting or deleting it. sigmaforge does not re-verify the
-engine at run time: the check happens at setup only.
-Setup needs network access on every run. Leftovers: `Zircolite.setup.*` after a failed clone or
-verification (inspect it, then remove it yourself) and `Zircolite.old.*` whenever a previous
-`Zircolite/` existed (it is moved aside, not deleted); and `Zircolite.untrusted.*` if the moved-in engine fails the final check (the previous engine is then restored automatically); all are git-ignored. The installed `Zircolite/` directory gets mode 0755 (`mktemp` would create 0700).
+The script clones the pinned engine fresh on every run and verifies it by content: the commit and
+tree, every tracked file against its blob id in the pinned tree (never consulting the git index,
+attributes, filters or hooks), no extra files or directories, and the hash-locked requirements. An
+existing `Zircolite/` is never trusted or deleted: it is moved into a private
+`Zircolite.old.XXXXXX/` directory. sigmaforge does not re-verify the engine at run time: the check
+happens at setup only, and anyone who can write to the engine directory afterwards can still change
+it.
+
+Setup needs network access on every run. Leftovers (all git-ignored; remove them yourself when not
+needed): `Zircolite.setup.*` after a failed clone or verification, `Zircolite.old.XXXXXX/` whenever a previous
+`Zircolite/` existed, and `Zircolite.untrusted.XXXXXX/` if the moved-in engine fails the
+final check (the previous engine is then restored automatically). The installed `Zircolite/`
+directory gets mode 0755 (`mktemp` would create 0700).
 
 Then obtain the corpora (see the table above) into `~/sigmaforge-v0/` and build the
 combined samples with the `scripts/build_*_benign.py` / `scripts/build_*_corpus.py`

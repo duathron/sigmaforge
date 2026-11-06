@@ -25,6 +25,16 @@ for a in "$@"; do
   if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$a" in -C|-c) skip=1 ;; -*) ;; *) sub="$a"; break ;; esac
 done
+if [ "$sub" = "ls-tree" ]; then exec "$SHIM_REAL_GIT" "$@"; fi
+if [ "$sub" = "hash-object" ]; then
+  out="$("$SHIM_REAL_GIT" "$@")"; rc=$?
+  echo "$out"
+  # the last tracked file hashed: swap the whole clone for a symlink right after the content check
+  if [ -n "${SHIM_SWAP_TO:-}" ] && [ "${@: -1}" = "zircolite.py" ] && [ "$cdir" != "Zircolite" ]; then
+    /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
+  fi
+  exit $rc
+fi
 if [ "$sub" = "status" ]; then
   out="$("$SHIM_REAL_GIT" "$@")"; rc=$?
   [ -n "$out" ] && echo "$out"
@@ -49,6 +59,8 @@ case "$*" in
     printf 'orjson>=3.9.15\\n' > "$dest/requirements.txt"
     : > "$dest/zircolite.py"
     chmod 600 "$dest/zircolite.py"
+    mkdir -p "$dest/lib/sub"
+    echo data > "$dest/lib/sub/data.txt"
     [ -n "${SHIM_NO_REPO:-}" ] && exit 0
     "$SHIM_REAL_GIT" -C "$dest" init -q
     "$SHIM_REAL_GIT" -C "$dest" add -A
@@ -169,7 +181,7 @@ def test_setup_engine_never_trusts_an_existing_checkout_and_moves_it_aside(tmp_p
     assert not (work / "Zircolite" / "evil.py").exists()
     assert (work / "Zircolite" / "zircolite.py").read_text() == ""
     aside = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
-    assert len(aside) == 1 and (aside[0] / "evil.py").exists()  # renamed, never deleted
+    assert len(aside) == 1 and (aside[0] / "Zircolite" / "evil.py").exists()  # renamed, never deleted
     assert aside[0].name in res.stdout
     _assert_git_never_touches_the_old_dir(log)
 
@@ -255,7 +267,7 @@ def test_setup_engine_replaces_a_dangling_symlink(tmp_path):
     assert res.returncode == 0, res.stderr + res.stdout
     assert (work / "Zircolite").is_dir() and not (work / "Zircolite").is_symlink()
     aside = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
-    assert len(aside) == 1 and aside[0].is_symlink()  # the link itself was moved aside, not followed
+    assert len(aside) == 1 and (aside[0] / "Zircolite").is_symlink()  # the link itself, not followed
 
 
 def test_setup_engine_failed_swap_names_both_paths_and_does_not_claim_done(tmp_path):
@@ -269,7 +281,7 @@ def test_setup_engine_failed_swap_names_both_paths_and_does_not_claim_done(tmp_p
     res, log, work = _run(tmp_path, existing=lambda d: (d / "keep.txt").write_text("mine"), bin_hook=failing_second_mv)
     assert res.returncode != 0 and "done" not in res.stdout
     aside = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
-    assert len(aside) == 1 and (aside[0] / "keep.txt").exists()
+    assert len(aside) == 1 and (aside[0] / "Zircolite" / "keep.txt").exists()
     msg = res.stderr
     assert "could not move" in msg and str(aside[0].name) in msg and "Zircolite.setup." in msg
     assert not _uv_installs(log)
@@ -304,7 +316,7 @@ def test_chmod_touches_only_the_fresh_clone_not_the_old_directory_or_its_files(t
     res, log, work = _run(tmp_path, existing=old)
     assert res.returncode == 0, res.stderr
     aside = next(p for p in work.iterdir() if p.name.startswith("Zircolite.old."))
-    assert _mode(aside) == 0o700 and _mode(aside / "f") == 0o640
+    assert _mode(aside) == 0o700 and _mode(aside / "Zircolite") == 0o700 and _mode(aside / "Zircolite" / "f") == 0o640
     assert _mode(work / "Zircolite") == 0o755
     assert _mode(work / "Zircolite" / "zircolite.py") == 0o600  # not recursive
 
@@ -314,6 +326,11 @@ def _victim(tmp_path):
     victim.mkdir()
     victim.chmod(0o700)
     (victim / "requirements.txt").write_bytes(REQ)  # PoC shape: matches the lock hash
+    (victim / "zircolite.py").write_text("")
+    (victim / "lib" / "sub").mkdir(parents=True)
+    (victim / "lib" / "sub" / "data.txt").write_text(
+        "data\n"
+    )  # and holds every tracked path, so only the link check can refuse
     return victim
 
 
@@ -371,6 +388,10 @@ def test_clone_swapped_for_a_symlink_between_chmod_and_move_is_refused_before_an
 # --- round 4: quarantine a rejected engine, require a clean working tree -----------------------
 
 
+def _content_rejected(res):
+    return "is not the pinned tree" in res.stderr
+
+
 def _untrusted(work):
     return [p for p in work.iterdir() if p.name.startswith("Zircolite.untrusted.")]
 
@@ -384,9 +405,9 @@ def test_rejected_final_engine_is_quarantined_and_the_previous_one_restored(tmp_
     assert res.returncode != 0 and "after the move" in res.stderr and not _uv_installs(log)
     assert (work / "Zircolite" / "keep").exists() and not (work / "Zircolite" / "zircolite.py").exists()
     q = _untrusted(work)
-    assert len(q) == 1 and (q[0] / "zircolite.py").exists() and q[0].name in res.stderr
+    assert len(q) == 1 and (q[0] / "Zircolite" / "zircolite.py").exists() and q[0].name in res.stderr
     assert "restored" in res.stderr
-    assert not any(p.name.startswith("Zircolite.old.") for p in work.iterdir())  # moved back, not left aside
+    assert not any((p / "Zircolite").exists() for p in work.iterdir() if p.name.startswith("Zircolite.old."))
 
 
 def test_rejected_final_engine_without_a_previous_one_leaves_no_zircolite(tmp_path):
@@ -412,7 +433,7 @@ def test_symlink_swapped_in_during_the_move_is_quarantined_and_the_victim_untouc
     assert res.returncode != 0 and not _uv_installs(log) and "done" not in res.stdout
     assert (work / "Zircolite" / "keep").exists() and not (work / "Zircolite").is_symlink()
     q = _untrusted(work)
-    assert len(q) == 1 and q[0].is_symlink()
+    assert len(q) == 1 and (q[0] / "Zircolite").is_symlink()
     assert _mode(victim) == 0o700 and (victim / "requirements.txt").exists()
 
 
@@ -431,13 +452,13 @@ def _tamper_after_first_mv(tmp_path, tamper):
 
 def test_modified_tracked_file_in_the_moved_clone_is_refused(tmp_path):
     res, log, work = _tamper_after_first_mv(tmp_path, 'echo evil > "$d/zircolite.py"')
-    assert res.returncode != 0 and not _uv_installs(log) and "not clean" in res.stderr
+    assert res.returncode != 0 and not _uv_installs(log) and _content_rejected(res)
     assert (work / "Zircolite" / "keep").exists() and len(_untrusted(work)) == 1
 
 
 def test_untracked_file_in_the_moved_clone_is_refused(tmp_path):
     res, log, work = _tamper_after_first_mv(tmp_path, 'echo evil > "$d/evil.py"')
-    assert res.returncode != 0 and not _uv_installs(log) and "not clean" in res.stderr
+    assert res.returncode != 0 and not _uv_installs(log) and _content_rejected(res)
     assert (work / "Zircolite" / "keep").exists() and len(_untrusted(work)) == 1
 
 
@@ -446,12 +467,161 @@ def test_ignored_file_in_the_moved_clone_is_refused(tmp_path):
     assert res.returncode != 0 and not _uv_installs(log)
 
 
-def test_a_clean_real_git_clone_passes_the_working_tree_check(tmp_path):
+def test_a_clean_real_git_clone_passes_the_content_check(tmp_path):
     res, log, work = _run(tmp_path)
     assert res.returncode == 0, res.stderr
-    assert any("status" in ln and "--untracked-files=all" in ln and "--ignored" in ln for ln in log.splitlines())
+    lines = log.splitlines()
+    assert any("ls-tree -r -z HEAD" in ln for ln in lines)
+    assert any("hash-object --no-filters -- " in ln for ln in lines)
+    assert not any(" status" in ln for ln in lines)  # the index is never consulted
+    assert all("core.hooksPath=/dev/null" in ln for ln in lines if ln.startswith("git["))
 
 
-def test_a_failing_git_status_is_a_refusal_not_a_pass(tmp_path):
+def test_a_clone_without_a_git_dir_is_a_refusal_not_a_pass(tmp_path):
     res, log, work = _run(tmp_path, extra_env={"SHIM_NO_REPO": "1"})
-    assert res.returncode != 0 and not _uv_installs(log) and "not clean" in res.stderr
+    assert res.returncode != 0 and not _uv_installs(log) and ".git is not a real directory" in res.stderr
+
+
+# --- round 5: content verification, private containers, guarded quarantine ----------------------
+
+
+def _refused_by_content(tmp_path, tamper):
+    res, log, work = _tamper_after_first_mv(tmp_path, tamper)
+    assert res.returncode != 0 and not _uv_installs(log) and _content_rejected(res), res.stderr
+    assert (work / "Zircolite" / "keep").exists() and len(_untrusted(work)) == 1
+
+
+def test_assume_unchanged_does_not_hide_a_modified_tracked_file(tmp_path):
+    _refused_by_content(
+        tmp_path,
+        '"$SHIM_REAL_GIT" -C "$d" update-index --assume-unchanged zircolite.py; echo evil > "$d/zircolite.py"',
+    )
+
+
+def test_skip_worktree_does_not_hide_a_modified_tracked_file(tmp_path):
+    _refused_by_content(
+        tmp_path,
+        '"$SHIM_REAL_GIT" -C "$d" update-index --skip-worktree zircolite.py; echo evil > "$d/zircolite.py"',
+    )
+
+
+def test_extra_empty_directory_is_refused(tmp_path):
+    _refused_by_content(tmp_path, 'mkdir "$d/emptydir"')
+
+
+def test_tracked_file_replaced_by_a_symlink_is_refused(tmp_path):
+    _refused_by_content(tmp_path, '/bin/mv "$d/zircolite.py" "$d/../moved.py"; ln -s /etc/hostname "$d/zircolite.py"')
+
+
+def test_changed_exec_bit_is_refused(tmp_path):
+    _refused_by_content(tmp_path, 'chmod 755 "$d/zircolite.py"')
+
+
+def test_forged_filter_and_attributes_are_never_executed(tmp_path):
+    marker = tmp_path / "FILTER_MARKER"
+    tamper = (
+        "printf '* filter=evil\\n' >> \"$d/.git/info/attributes\"; "
+        f"printf '[filter \"evil\"]\\n\\tclean = touch {marker}\\n[core]\\n\\tfsmonitor = touch {marker}\\n' "
+        '>> "$d/.git/config"; '
+        f"printf '#!/bin/sh\\ntouch {marker}\\n' > \"$d/.git/hooks/post-index-change\"; "
+        'chmod 755 "$d/.git/hooks/post-index-change"'
+    )
+    res, log, work = _tamper_after_first_mv(tmp_path, tamper)
+    assert res.returncode == 0, res.stderr  # the content is the pinned tree; .git internals are not executed
+    assert not marker.exists()
+
+
+def test_old_engine_container_is_private_fresh_and_unpredictable(tmp_path):
+    res, log, work = _run(tmp_path, existing=_old)
+    assert res.returncode == 0, res.stderr
+    containers = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
+    assert len(containers) == 1 and _mode(containers[0]) == 0o700
+    assert not re.fullmatch(r"Zircolite\.old\.\d{14}\.\d+", containers[0].name)  # not <timestamp>.<pid>
+    assert (containers[0] / "Zircolite" / "keep").exists()
+
+
+def test_a_planted_dir_at_a_timestamped_name_cannot_capture_the_old_engine(tmp_path):
+    def plant(work):
+        for n in ("Zircolite.old.20260101000000.1", "Zircolite.untrusted.20260101000000.1"):
+            (work / n).mkdir()
+
+    res, log, work = _run(tmp_path, existing=_old, pre=plant)
+    assert res.returncode == 0, res.stderr
+    assert not (work / "Zircolite.old.20260101000000.1" / "Zircolite").exists()
+    assert len(list(work.glob("Zircolite.old.??????"))) == 1
+
+
+def _mv_failing_on(n_fail, then=""):
+    def hook(bindir):
+        (bindir / "mv").write_text(
+            "#!/bin/bash\n"
+            'n=$(cat "$SHIM_LOG.mv" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$SHIM_LOG.mv"\n'
+            f'if [ "$n" = {n_fail} ]; then exit 1; fi\n'
+            '/bin/mv "$@" || exit 1\n'
+            f"{then}\n"
+        )
+        (bindir / "mv").chmod(0o755)
+
+    return hook
+
+
+def test_a_failing_quarantine_rename_names_both_paths_and_exits_1(tmp_path):
+    # calls: 1 aside, 2 move in, 3 quarantine (fails)
+    def hook(bindir):
+        _mv_failing_on(3)(bindir)
+
+    res, log, work = _run(tmp_path, existing=_old, extra_env={"SHIM_HEAD_AFTER": "9" * 40}, bin_hook=hook)
+    assert res.returncode != 0 and not _uv_installs(log) and "done" not in res.stdout
+    assert "could not be quarantined" in res.stderr and "REJECTED" in res.stderr
+    assert "Zircolite.old." in res.stderr and "Do not use" in res.stderr
+
+
+def test_a_failing_restore_says_so_and_names_the_container(tmp_path):
+    # calls: 1 aside, 2 move in, 3 quarantine, 4 restore (fails)
+    res, log, work = _run(tmp_path, existing=_old, extra_env={"SHIM_HEAD_AFTER": "9" * 40}, bin_hook=_mv_failing_on(4))
+    assert res.returncode != 0 and not _uv_installs(log)
+    assert "Could NOT restore" in res.stderr and "Zircolite.old." in res.stderr
+    container = next(p for p in work.iterdir() if p.name.startswith("Zircolite.old."))
+    assert (container / "Zircolite" / "keep").exists() and container.name in res.stderr
+
+
+def test_restore_aborts_instead_of_nesting_when_the_destination_exists_again(tmp_path):
+    # after the quarantine rename (call 3) an attacker re-creates Zircolite/
+    res, log, work = _run(
+        tmp_path,
+        existing=_old,
+        extra_env={"SHIM_HEAD_AFTER": "9" * 40},
+        bin_hook=_mv_failing_on(99, then='if [ "$n" = 3 ]; then mkdir Zircolite; fi'),
+    )
+    assert res.returncode != 0 and not _uv_installs(log)
+    assert "Could NOT restore" in res.stderr and "exists again" in res.stderr
+    container = next(p for p in work.iterdir() if p.name.startswith("Zircolite.old."))
+    assert (container / "Zircolite" / "keep").exists()  # the old engine was not moved onto the new dir
+    assert not (work / "Zircolite" / "Zircolite").exists()
+
+
+def test_tracked_file_replaced_by_a_symlink_to_identical_content_is_refused(tmp_path):
+    # git hash-object follows the link and would see the same blob: only the explicit link check catches it
+    _refused_by_content(
+        tmp_path, ': > "$d/../same.py"; /bin/mv "$d/zircolite.py" "$d/../orig.py"; ln -s ../same.py "$d/zircolite.py"'
+    )
+
+
+def test_a_nested_extra_directory_is_refused(tmp_path):
+    _refused_by_content(tmp_path, 'mkdir "$d/lib/extra"')
+
+
+def test_a_missing_nested_file_is_refused(tmp_path):
+    _refused_by_content(tmp_path, '/bin/mv "$d/lib/sub/data.txt" "$d/../data.bak"')
+
+
+def test_a_git_dir_that_is_a_symlink_is_refused(tmp_path):
+    res, log, work = _tamper_after_first_mv(tmp_path, '/bin/mv "$d/.git" "$d/../realgit"; ln -s ../realgit "$d/.git"')
+    assert res.returncode != 0 and not _uv_installs(log) and ".git is not a real directory" in res.stderr
+
+
+def test_quarantine_container_is_private_and_unpredictable(tmp_path):
+    res, log, work = _run(tmp_path, existing=_old, extra_env={"SHIM_HEAD_AFTER": "9" * 40})
+    q = _untrusted(work)
+    assert len(q) == 1 and _mode(q[0]) == 0o700
+    assert not re.fullmatch(r"Zircolite\.untrusted\.\d{14}\.\d+", q[0].name)
