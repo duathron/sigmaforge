@@ -6,10 +6,12 @@ repos:
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: end-of-file-fixer
+        exclude: ^(data|reports)/
       - id: trailing-whitespace
+        exclude: ^(data|reports)/
       - id: check-yaml
       - id: check-added-large-files
   - repo: https://github.com/gitleaks/gitleaks
