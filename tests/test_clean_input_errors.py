@@ -815,3 +815,192 @@ def test_sha256_file_read_oserror_is_unreadable(monkeypatch):
     monkeypatch.setattr(pipeline, "open_regular", fake_open)
     with pytest.raises(pipeline.InputLoadError, match="unreadable"):
         pipeline._sha256_file("p", 10, "x")
+
+
+# --- fix round 5: aliases, rule file counts and totals, per-line cap ----------------------------
+
+
+def _alias_bomb(levels=10, fan=9):
+    lines = ["title: t", "level: high", "bomb0: &a0 [x]"]
+    for i in range(1, levels):
+        lines.append(f"bomb{i}: &a{i} [" + ",".join([f"*a{i - 1}"] * fan) + "]")
+    lines += ["detection:", f"  condition: *a{levels - 1}"]
+    return "\n".join(lines) + "\n"
+
+
+def test_alias_bomb_rule_is_refused_fast_in_a_subprocess(tmp_path):
+    d = tmp_path / HOSTILE
+    d.mkdir()
+    (d / "a.yml").write_text(_alias_bomb())
+    assert len(_alias_bomb()) < 1000
+    r = _rules_cli(tmp_path, d / "a.yml", timeout=15)
+    assert r.returncode == 4, (r.stdout[:300], r.stderr[:300])
+    assert "Cannot load rule file" in r.stdout and "aliases are not allowed" in r.stdout
+    assert len(r.stdout.strip().splitlines()) == 1
+
+
+def test_plain_anchor_without_alias_is_also_refused(tmp_path):
+    f = tmp_path / "a.yml"
+    f.write_text("title: &t x\nlevel: high\n")
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and "aliases are not allowed" in res.output
+
+
+def test_alias_in_comiset_mapping_is_refused(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["cm"].write_text("mappings: &m\n  _source.a: A\nother: *m\n")
+    _assert_clean(_backtest(tmp_path, ins), 4, "aliases are not allowed")
+
+
+def test_alias_in_config_is_refused_with_exit_2(tmp_path):
+    ins = _inputs(tmp_path)
+    cfg = _cfg(tmp_path, b"x: &a [1]\nbacktest:\n  floor: 5\ny: *a\n")
+    _assert_clean(_backtest(tmp_path, ins, config=cfg), 2, "aliases are not allowed")
+
+
+def test_rule_file_with_too_many_yaml_nodes_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr("sigmaforge.pipeline.RULE_FILE_MAX_NODES", 5)
+    f = tmp_path / "a.yml"
+    f.write_text("title: t\nlevel: high\nx: [1, 2, 3]\n")
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and "too many YAML nodes" in res.output
+    monkeypatch.setattr("sigmaforge.pipeline.RULE_FILE_MAX_NODES", 1000)
+    assert "too many YAML nodes" not in _rules_run(tmp_path, f).output
+
+
+def test_total_yaml_nodes_across_rule_files_are_capped(tmp_path, monkeypatch):
+    d = tmp_path / "rules"
+    d.mkdir()
+    for i in range(3):
+        (d / f"r{i}.yml").write_text("title: t\nlevel: low\n")  # 5 nodes each
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 14)
+    res = _rules_run(tmp_path, d / "*.yml")
+    assert res.exit_code == 4 and "too many YAML nodes" in res.output
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 15)
+    assert "too many YAML nodes" not in _rules_run(tmp_path, d / "*.yml").output
+
+
+def test_too_many_rule_files_is_refused(tmp_path, monkeypatch):
+    d = tmp_path / "rules"
+    d.mkdir()
+    for i in range(3):
+        (d / f"r{i}.yml").write_text("title: t\nlevel: low\n")
+    monkeypatch.setattr("sigmaforge.pipeline.MAX_RULE_FILES", 2)
+    res = _rules_run(tmp_path, d / "*.yml")
+    assert res.exit_code == 4 and "too many rule files" in res.output and len(res.output.strip().splitlines()) == 1
+    monkeypatch.setattr("sigmaforge.pipeline.MAX_RULE_FILES", 3)
+    assert "too many rule files" not in _rules_run(tmp_path, d / "*.yml").output
+
+
+def test_total_rule_bytes_are_capped(tmp_path, monkeypatch):
+    d = tmp_path / "rules"
+    d.mkdir()
+    body = "title: t\nlevel: low\n"
+    for i in range(3):
+        (d / f"r{i}.yml").write_text(body)
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_BYTES", len(body) * 3 - 1)
+    res = _rules_run(tmp_path, d / "*.yml")
+    assert res.exit_code == 4 and "too large in total" in res.output
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_BYTES", len(body) * 3)
+    assert "too large in total" not in _rules_run(tmp_path, d / "*.yml").output
+
+
+@pytest.mark.parametrize("text", ["- just\n- a list\n", "just a scalar\n"])
+def test_rule_document_that_is_not_a_mapping_names_its_file(tmp_path, text):
+    d = tmp_path / HOSTILE
+    d.mkdir()
+    (d / "a.yml").write_text(text)
+    res = _rules_run(tmp_path, d / "*.yml")  # a glob: the message must name the FILE, not the glob
+    assert res.exit_code == 4 and "malformed rule structure" in res.output
+    assert "a.yml" in res.output and "*" not in res.output and len(res.output.strip().splitlines()) == 1
+
+
+def test_rule_caps_are_pinned():
+    from sigmaforge import pipeline
+
+    assert pipeline.MAX_RULE_FILES == 20_000
+    assert pipeline.RULES_MAX_TOTAL_BYTES == 64 * 1024 * 1024
+    assert pipeline.RULE_FILE_MAX_NODES == 100_000
+    assert pipeline.RULES_MAX_TOTAL_NODES == 2_000_000
+    assert pipeline.BENIGN_LINE_MAX_BYTES == 1024 * 1024
+
+
+def test_benign_sample_line_over_the_line_cap_is_refused(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    line = b'{"_source": {"a": 1}}\n'
+    ins["bs"].write_bytes(line + line)
+    monkeypatch.setattr("sigmaforge.pipeline.BENIGN_LINE_MAX_BYTES", len(line))
+    assert "Cannot load" not in _backtest(tmp_path, ins).output
+    monkeypatch.setattr("sigmaforge.pipeline.BENIGN_LINE_MAX_BYTES", len(line) - 1)
+    _assert_clean(_backtest(tmp_path, ins), 4, "line too long")
+
+
+def test_iter_lines_line_cap_unit(monkeypatch):
+    fake = _Fake(b"ab\ncdefg\n")
+    sr = _patch_open(monkeypatch, fake)
+    with pytest.raises(sr.ReadRefused, match="line too long"):
+        list(sr.iter_lines_capped("p", 100, line_cap=4))
+    assert fake.asked[0] == 5  # min(budget 101, line_cap + 1)
+    fake2 = _Fake(b"ab\ncd\n")
+    sr = _patch_open(monkeypatch, fake2)
+    assert list(sr.iter_lines_capped("p", 100, line_cap=3)) == [b"ab\n", b"cd\n"]
+
+
+def test_undefined_alias_is_also_refused_as_an_alias(tmp_path):
+    f = tmp_path / "a.yml"
+    f.write_text("title: t\nlevel: high\nx: *nope\n")
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and "aliases are not allowed" in res.output
+
+
+def test_json_ruleset_holding_yaml_is_refused_fast_and_not_retried_as_yaml(tmp_path):
+    import time
+
+    f = tmp_path / "compiled.json"
+    f.write_text("title: t\nlevel: high\n")  # valid YAML, not JSON
+    t0 = time.monotonic()
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and "invalid JSON" in res.output and len(res.output.strip().splitlines()) == 1
+    assert time.monotonic() - t0 < 10
+
+
+@pytest.mark.parametrize("body,reason", [("[" * 100_000, "too deeply nested"), ("[1, 2]", "malformed rule structure")])
+def test_json_ruleset_depth_and_shape_are_refused(tmp_path, body, reason):
+    f = tmp_path / "compiled.json"
+    f.write_text(body)
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and reason in res.output and len(res.output.strip().splitlines()) == 1
+
+
+def test_large_real_shaped_json_ruleset_loads_within_a_time_bound(tmp_path):
+    import time
+
+    from sigmaforge import pipeline
+
+    rules = [
+        {
+            "title": f"Rule {i}",
+            "id": f"00000000-0000-0000-0000-{i:012d}",
+            "level": "high",
+            "description": "d" * 200,
+            "tags": ["attack.execution", "attack.t1059"],
+            "filename": f"rule_{i}.yml",
+            "rule": [f"SELECT * FROM logs WHERE a{j} LIKE '%x%'" for j in range(8)],
+            "detection": {"condition": "selection", "selection": {"Image|endswith": "\\\\cmd.exe"}},
+        }
+        for i in range(12_000)
+    ]
+    f = tmp_path / "sigmaforge_loaded.json"
+    f.write_text(json.dumps(rules))
+    assert f.stat().st_size > 8_000_000
+    t0 = time.monotonic()
+    loaded = pipeline._load_loaded_rules(str(f))
+    assert len(loaded) == 12_000 and time.monotonic() - t0 < 10
+
+
+def test_json_ruleset_with_a_single_rule_object_loads(tmp_path):
+    from sigmaforge import pipeline
+
+    f = tmp_path / "one.json"
+    f.write_text(json.dumps({"title": "t", "level": "high", "detection": {"condition": "selection"}}))
+    assert [r["title"] for r in pipeline._load_loaded_rules(str(f))] == ["t"]

@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 from shipwright_kit.config import app_dir, load_config, resolve_config_file
 
+from sigmaforge import safe_yaml
 from sigmaforge.safe_read import ReadRefused, read_capped
 
 #: A config file larger than this is refused as "too large".
@@ -61,9 +62,11 @@ class ConfigError(ValueError):
 
 def _load_yaml(path: Path) -> dict:
     try:
-        data = yaml.safe_load(read_capped(path, CONFIG_MAX_BYTES).decode("utf-8")) or {}
+        data = safe_yaml.load(read_capped(path, CONFIG_MAX_BYTES).decode("utf-8")) or {}
     except ReadRefused as e:
         raise ConfigError(path, e.reason) from None
+    except safe_yaml.YamlAliasError:
+        raise ConfigError(path, "YAML aliases are not allowed") from None
     except yaml.YAMLError:
         raise ConfigError(path, "invalid YAML") from None
     except UnicodeDecodeError:

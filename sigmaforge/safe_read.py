@@ -60,13 +60,15 @@ def read_capped(path: object, cap: int) -> bytes:
     return data
 
 
-def iter_lines_capped(path: object, cap: int) -> Iterator[bytes]:
-    """Lines of a regular file, refusing one that grows past ``cap`` bytes in total."""
+def iter_lines_capped(path: object, cap: int, line_cap: int | None = None) -> Iterator[bytes]:
+    """Lines of a regular file, refusing one that grows past ``cap`` bytes in total or a single
+    line longer than ``line_cap`` bytes (newline included)."""
     with open_regular(path, cap) as fh:
         seen = 0
         while True:
             try:
-                line = fh.readline(cap + 1 - seen)
+                budget = cap + 1 - seen
+                line = fh.readline(budget if line_cap is None else min(budget, line_cap + 1))
             except OSError:
                 raise ReadRefused("unreadable") from None
             if not line:
@@ -74,4 +76,6 @@ def iter_lines_capped(path: object, cap: int) -> Iterator[bytes]:
             seen += len(line)
             if seen > cap:
                 raise ReadRefused("too large")
+            if line_cap is not None and len(line) > line_cap:
+                raise ReadRefused("line too long")
             yield line

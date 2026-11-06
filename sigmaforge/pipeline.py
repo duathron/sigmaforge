@@ -26,6 +26,7 @@ from pathlib import Path
 
 import yaml
 
+from sigmaforge import safe_yaml
 from sigmaforge.ingest.ruleload import RuleLoadError, partition_rules
 from sigmaforge.ingest.zircolite_runner import run_shard
 from sigmaforge.orchestrate import run_backtest
@@ -102,6 +103,12 @@ BENIGN_SAMPLE_MAX_BYTES = 256 * 1024 * 1024
 BENIGN_SAMPLE_MAX_EVENTS = 500_000  # scripts/build_benign_sample.py scans at most 5M raw lines (EID-1 subset)
 RULE_FILE_MAX_BYTES = 1024 * 1024
 RULESET_HASH_MAX_BYTES = 64 * 1024 * 1024
+BENIGN_LINE_MAX_BYTES = 1024 * 1024  # real events are a few KB
+#: Rule loading budget (the SigmaHQ corpus is ~3,000 files, a few MB, well under 1M YAML nodes).
+MAX_RULE_FILES = 20_000
+RULES_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+RULE_FILE_MAX_NODES = 100_000
+RULES_MAX_TOTAL_NODES = 2_000_000
 
 
 class InputLoadError(ValueError):
@@ -160,9 +167,11 @@ def _load_technique_map(path: str) -> dict:
 def _load_comiset_field_map(comiset_mapping: str) -> dict[str, str]:
     what = "COMISET mapping"
     try:
-        cfg = yaml.safe_load(read_capped(comiset_mapping, COMISET_MAPPING_MAX_BYTES).decode("utf-8"))
+        cfg = safe_yaml.load(read_capped(comiset_mapping, COMISET_MAPPING_MAX_BYTES).decode("utf-8"))
     except ReadRefused as e:
         raise InputLoadError(comiset_mapping, what, e.reason) from None
+    except safe_yaml.YamlAliasError:
+        raise InputLoadError(comiset_mapping, what, "YAML aliases are not allowed") from None
     except yaml.YAMLError:
         raise InputLoadError(comiset_mapping, what, "invalid YAML") from None
     except UnicodeDecodeError:
@@ -185,7 +194,7 @@ def _load_benign_sample(path: str, field_map: dict[str, str]) -> list[dict]:
     what = "benign sample"
     events: list[dict] = []
     try:
-        for raw in iter_lines_capped(path, BENIGN_SAMPLE_MAX_BYTES):
+        for raw in iter_lines_capped(path, BENIGN_SAMPLE_MAX_BYTES, BENIGN_LINE_MAX_BYTES):
             try:
                 doc = json.loads(raw.decode("utf-8"))
             except UnicodeDecodeError:
@@ -216,20 +225,47 @@ def _project_event(src: dict, field_map: dict[str, str]) -> dict:
 
 def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
     rules = []
-    for f in glob.glob(loaded_rules_glob):
+    files = glob.glob(loaded_rules_glob)
+    if len(files) > MAX_RULE_FILES:
+        raise RuleLoadError(loaded_rules_glob, "too many rule files")
+    total_bytes = total_nodes = 0
+    for f in files:
         try:
             # a compiled ruleset (.json, passed as --rules) is far larger than one Sigma YAML rule
             cap = RULESET_HASH_MAX_BYTES if f.lower().endswith(".json") else RULE_FILE_MAX_BYTES
-            text = read_capped(f, cap).decode("utf-8")
-            for doc in yaml.safe_load_all(text):
-                if doc:
-                    rules.append(doc)
+            raw = read_capped(f, cap)
+            total_bytes += len(raw)
+            if total_bytes > RULES_MAX_TOTAL_BYTES:
+                raise RuleLoadError(loaded_rules_glob, "rule files too large in total")
+            if f.lower().endswith(".json"):
+                # a compiled ruleset: parsed by the C JSON parser (never the pure-Python YAML one), and a
+                # file that is not valid JSON is refused, not retried as YAML
+                top = json.loads(raw.decode("utf-8"))
+                docs = top if isinstance(top, list) else [top]
+            else:
+                budget = min(RULE_FILE_MAX_NODES, RULES_MAX_TOTAL_NODES - total_nodes)
+                docs, nodes = safe_yaml.load_all(raw.decode("utf-8"), max_nodes=max(budget, 0))
+                total_nodes += nodes
+            for doc in docs:
+                if not doc:
+                    continue
+                if not isinstance(doc, dict):  # a Sigma rule is a mapping: refuse before any deep walk
+                    raise RuleLoadError(f, "malformed rule structure")
+                rules.append(doc)
         except ReadRefused as e:
             raise RuleLoadError(f, e.reason) from None
+        except safe_yaml.YamlAliasError:
+            raise RuleLoadError(f, "YAML aliases are not allowed") from None
+        except safe_yaml.YamlTooComplexError:
+            raise RuleLoadError(f, "too many YAML nodes") from None
         except yaml.YAMLError:
             raise RuleLoadError(f, "invalid YAML") from None
+        except json.JSONDecodeError:
+            raise RuleLoadError(f, "invalid JSON") from None
         except RecursionError:
             raise RuleLoadError(f, "too deeply nested") from None
+        except RuleLoadError:
+            raise
         except (OSError, ValueError):  # unreadable, or not valid text
             raise RuleLoadError(f, "unreadable") from None
     try:
