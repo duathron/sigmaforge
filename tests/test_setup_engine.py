@@ -16,14 +16,29 @@ REQ = b"orjson>=3.9.15\n"
 
 GIT_SHIM = """#!/bin/bash
 echo "git[GIT_DIR=${GIT_DIR-unset} WT=${GIT_WORK_TREE-unset}] $*" >> "$SHIM_LOG"
+cdir=""
+prev=""
+for a in "$@"; do [ "$prev" = "-C" ] && cdir="$a"; prev="$a"; done
 case "$*" in
-  *'HEAD^{tree}'*) echo "$SHIM_TREE"; exit 0 ;;
-  *rev-parse*) echo "$SHIM_HEAD"; exit 0 ;;
+  *'HEAD^{tree}'*)
+    echo "$SHIM_TREE"
+    if [ -n "${SHIM_SWAP_TO:-}" ] && [ "$cdir" != "Zircolite" ]; then
+      /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
+    fi
+    exit 0 ;;
+  *rev-parse*)
+    if [ "$cdir" = "Zircolite" ] && [ -n "${SHIM_HEAD_AFTER:-}" ]; then
+      echo "$SHIM_HEAD_AFTER"
+    else
+      echo "$SHIM_HEAD"
+    fi
+    exit 0 ;;
   *clone*)
     dest="${@: -1}"
     mkdir -p "$dest/.git"
     printf 'orjson>=3.9.15\\n' > "$dest/requirements.txt"
     : > "$dest/zircolite.py"
+    chmod 600 "$dest/zircolite.py"
     exit 0 ;;
 esac
 exit 0
@@ -86,6 +101,15 @@ def _run(
     return res, log.read_text(), work
 
 
+def _assert_git_never_touches_the_old_dir(log):
+    lines = log.splitlines()
+    assert not any("Zircolite.old" in ln for ln in lines)
+    setup_calls = [i for i, ln in enumerate(lines) if "Zircolite.setup." in ln]
+    final_calls = [i for i, ln in enumerate(lines) if re.search(r"-C Zircolite( |$)", ln)]
+    # git only ever runs in the fresh clone, and in the final directory strictly after the swap
+    assert setup_calls and all(i > max(setup_calls) for i in final_calls)
+
+
 def _uv_installs(log):
     return [ln for ln in log.splitlines() if ln.startswith("uv ") and "install" in ln]
 
@@ -132,7 +156,7 @@ def test_setup_engine_never_trusts_an_existing_checkout_and_moves_it_aside(tmp_p
     aside = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
     assert len(aside) == 1 and (aside[0] / "evil.py").exists()  # renamed, never deleted
     assert aside[0].name in res.stdout
-    assert not any(re.search(r"-C Zircolite( |$)", ln) or "Zircolite.old" in ln for ln in log.splitlines())
+    _assert_git_never_touches_the_old_dir(log)
 
 
 def test_setup_engine_replaces_a_forged_git_dir_with_empty_objects(tmp_path):
@@ -165,7 +189,7 @@ def test_setup_engine_never_runs_git_inside_the_hostile_old_checkout(tmp_path):
     res, log, work = _run(tmp_path, existing=hostile)
     assert res.returncode == 0, res.stderr
     assert not marker.exists()
-    assert not any("old" in ln and "-C" in ln for ln in log.splitlines())
+    _assert_git_never_touches_the_old_dir(log)
 
 
 def test_setup_engine_git_calls_ignore_ambient_git_environment(tmp_path):
@@ -248,3 +272,81 @@ def test_setup_leftovers_are_gitignored_and_documented():
     for doc in ("README.md", "sigmaforge/MANUAL.md"):
         text = (ROOT / doc).read_text()
         assert "Zircolite.setup." in text and "network" in text and "0755" in text, doc
+        assert "whenever a previous" in text and "git-ignored" in text, doc
+
+
+def _mode(path):
+    return path.stat().st_mode & 0o777
+
+
+def test_chmod_touches_only_the_fresh_clone_not_the_old_directory_or_its_files(tmp_path):
+    def old(d):
+        (d / "f").write_text("x")
+        (d / "f").chmod(0o640)
+        d.chmod(0o700)
+
+    res, log, work = _run(tmp_path, existing=old)
+    assert res.returncode == 0, res.stderr
+    aside = next(p for p in work.iterdir() if p.name.startswith("Zircolite.old."))
+    assert _mode(aside) == 0o700 and _mode(aside / "f") == 0o640
+    assert _mode(work / "Zircolite") == 0o755
+    assert _mode(work / "Zircolite" / "zircolite.py") == 0o600  # not recursive
+
+
+def _victim(tmp_path):
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    victim.chmod(0o700)
+    (victim / "requirements.txt").write_bytes(REQ)  # PoC shape: matches the lock hash
+    return victim
+
+
+def test_clone_swapped_for_a_symlink_after_the_checks_is_refused(tmp_path):
+    victim = _victim(tmp_path)
+    res, log, work = _run(
+        tmp_path, existing=lambda d: (d / "keep").write_text("mine"), extra_env={"SHIM_SWAP_TO": str(victim)}
+    )
+    assert res.returncode != 0 and "symbolic link" in res.stderr
+    assert _mode(victim) == 0o700  # chmod never followed the link
+    assert not _uv_installs(log)
+    assert (work / "Zircolite" / "keep").exists()  # nothing was moved aside or in
+
+
+def test_clone_swapped_for_a_symlink_during_the_move_is_caught_by_the_reverification(tmp_path):
+    victim = _victim(tmp_path)
+
+    def swapping_mv(bindir):
+        (bindir / "mv").write_text(
+            "#!/bin/bash\n"
+            '/bin/mv "$@" || exit 1\n'
+            'n=$(cat "$SHIM_LOG.mv" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$SHIM_LOG.mv"\n'
+            f'if [ "$n" = 1 ]; then d=$(ls -d Zircolite.setup.*); /bin/mv "$d" "$d.real"; ln -s {victim} "$d"; fi\n'
+        )
+        (bindir / "mv").chmod(0o755)
+
+    res, log, work = _run(tmp_path, existing=lambda d: (d / "keep").write_text("mine"), bin_hook=swapping_mv)
+    assert res.returncode != 0 and "after the move" in res.stderr and "Zircolite.old." in res.stderr
+    assert not _uv_installs(log) and "done" not in res.stdout
+
+
+def test_wrong_head_at_the_final_location_is_refused_and_names_the_previous_engine(tmp_path):
+    res, log, work = _run(
+        tmp_path, existing=lambda d: (d / "keep").write_text("mine"), extra_env={"SHIM_HEAD_AFTER": "9" * 40}
+    )
+    assert res.returncode != 0 and "after the move" in res.stderr and "Zircolite.old." in res.stderr
+    assert not _uv_installs(log)
+
+
+def test_clone_swapped_for_a_symlink_between_chmod_and_move_is_refused_before_anything_moves(tmp_path):
+    victim = _victim(tmp_path)
+
+    def swapping_chmod(bindir):
+        (bindir / "chmod").write_text(
+            f'#!/bin/bash\n/bin/chmod "$@" || exit 1\n/bin/mv "$2" "$2.real" && ln -s {victim} "$2"\n'
+        )
+        (bindir / "chmod").chmod(0o755)
+
+    res, log, work = _run(tmp_path, existing=lambda d: (d / "keep").write_text("mine"), bin_hook=swapping_chmod)
+    assert res.returncode != 0 and "symbolic link" in res.stderr
+    assert (work / "Zircolite" / "keep").exists() and not _uv_installs(log)
+    assert not any(p.name.startswith("Zircolite.old.") for p in work.iterdir())  # nothing moved aside

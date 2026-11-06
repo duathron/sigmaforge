@@ -11,7 +11,7 @@
 # requirements.txt against the lock, and only then renames the old directory aside
 # (Zircolite.old.<timestamp>, never deleted) and the new one into place. Dependencies are
 # installed from scripts/zircolite-requirements.lock with `--require-hashes`.
-# Leftovers: Zircolite.setup.* after a failed clone/verification, Zircolite.old.* after every run (both git-ignored).
+# Leftovers: Zircolite.setup.* after a failed clone/verification, Zircolite.old.* whenever a previous Zircolite/ existed (both git-ignored).
 # sigmaforge does not re-verify the engine at run time: this is a setup-time check only; whoever
 # can write to the engine directory afterwards can run code as you.
 set -euo pipefail
@@ -31,27 +31,50 @@ safe_git() {
         git -c core.fsmonitor=false "$@"
 }
 
+# verify_dir DIR: succeed only for a real directory (not a symbolic link) that is at the pinned
+# commit AND tree and whose requirements.txt matches the lock. Sets VERIFY_ERR on failure.
+verify_dir() {
+    local d="$1" h t want have
+    VERIFY_ERR=""
+    if [ -L "$d" ]; then
+        VERIFY_ERR="$d is a symbolic link, not the verified clone"
+        return 1
+    fi
+    h="$(safe_git -C "$d" rev-parse HEAD)"
+    t="$(safe_git -C "$d" rev-parse 'HEAD^{tree}')"
+    if [ "$h" != "$ZIRCOLITE_COMMIT" ] || [ "$t" != "$ZIRCOLITE_TREE" ]; then
+        VERIFY_ERR="$d is at commit $h / tree $t, expected $ZIRCOLITE_COMMIT / $ZIRCOLITE_TREE"
+        return 1
+    fi
+    want="$(sed -n 's/^# requirements-sha256: \([0-9a-f]\{64\}\)$/\1/p' "$LOCK" | head -n 1)"
+    have="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$d/requirements.txt")"
+    if [ -z "$want" ] || [ "$want" != "$have" ]; then
+        VERIFY_ERR="$d/requirements.txt (sha256 $have) does not match the lock ($want); regenerate scripts/zircolite-requirements.lock (command in its header)"
+        return 1
+    fi
+    return 0
+}
+
+refuse_if_link() {
+    if [ -L "$NEW" ]; then
+        echo "[setup] ERROR: $NEW was replaced by a symbolic link after it was verified; nothing was moved or installed." >&2
+        exit 1
+    fi
+}
+
 NEW="$(mktemp -d "${DEST}.setup.XXXXXX")"
 echo "[setup] cloning Zircolite $ZIRCOLITE_VERSION into $NEW ..."
 safe_git clone --depth 1 --branch "$ZIRCOLITE_VERSION" "$ZIRCOLITE_REPO" "$NEW"
 
-head="$(safe_git -C "$NEW" rev-parse HEAD)"
-tree="$(safe_git -C "$NEW" rev-parse 'HEAD^{tree}')"
-if [ "$head" != "$ZIRCOLITE_COMMIT" ] || [ "$tree" != "$ZIRCOLITE_TREE" ]; then
-    echo "[setup] ERROR: the clone is at commit $head / tree $tree, expected $ZIRCOLITE_COMMIT / $ZIRCOLITE_TREE." >&2
+if ! verify_dir "$NEW"; then
+    echo "[setup] ERROR: $VERIFY_ERR." >&2
     echo "[setup] Nothing was installed; the untrusted clone was left at $NEW for inspection." >&2
     exit 1
 fi
 
-want="$(sed -n 's/^# requirements-sha256: \([0-9a-f]\{64\}\)$/\1/p' "$LOCK" | head -n 1)"
-have="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$NEW/requirements.txt")"
-if [ -z "$want" ] || [ "$want" != "$have" ]; then
-    echo "[setup] ERROR: $NEW/requirements.txt (sha256 $have) does not match the lock ($want)." >&2
-    echo "[setup] Regenerate scripts/zircolite-requirements.lock (command in its header); nothing was installed." >&2
-    exit 1
-fi
-
+refuse_if_link
 chmod 755 "$NEW"  # mktemp creates 0700; the verified engine directory should be readable like a normal checkout
+refuse_if_link
 
 if [ -e "$DEST" ] || [ -L "$DEST" ]; then
     ASIDE="$DEST.old.$(date +%Y%m%d%H%M%S).$$"
@@ -62,6 +85,12 @@ mv "$NEW" "$DEST" || {
     echo "[setup] ERROR: could not move '$NEW' into place as '$DEST'; your previous engine, if any, is at '${ASIDE:-}' (mv it back to '$DEST')." >&2
     exit 1
 }
+
+# Re-verify what is now at $DEST: the clone directory could have been swapped between the checks and the move.
+if ! verify_dir "$DEST"; then
+    echo "[setup] ERROR: after the move, $VERIFY_ERR. Nothing was installed. Your previous engine, if any, is at '${ASIDE:-}' (mv it back to '$DEST')." >&2
+    exit 1
+fi
 
 echo "[setup] installing Zircolite runtime requirements (hash-checked) into the uv env ..."
 uv pip install --require-hashes -r "$LOCK"

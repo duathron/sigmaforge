@@ -116,8 +116,8 @@ requirements are hash-locked) and moves any existing `Zircolite/` aside to
 `Zircolite.old.<timestamp>` instead of trusting or deleting it. sigmaforge does not re-verify the
 engine at run time: the check happens at setup only.
 Setup needs network access on every run. Leftovers: `Zircolite.setup.*` after a failed clone or
-verification (inspect it, then remove it yourself) and `Zircolite.old.*` after each run; both are
-git-ignored. The installed `Zircolite/` directory gets mode 0755 (`mktemp` would create 0700).
+verification (inspect it, then remove it yourself) and `Zircolite.old.*` whenever a previous
+`Zircolite/` existed (it is moved aside, not deleted); both are git-ignored. The installed `Zircolite/` directory gets mode 0755 (`mktemp` would create 0700).
 
 Then obtain the corpora (see the table above) into `~/sigmaforge-v0/` and build the
 combined samples with the `scripts/build_*_benign.py` / `scripts/build_*_corpus.py`
