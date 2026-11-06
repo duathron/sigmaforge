@@ -9,7 +9,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: end-of-file-fixer
+        exclude: ^(data|reports)/
       - id: trailing-whitespace
+        exclude: ^(data|reports)/
       - id: check-yaml
       - id: check-added-large-files
   - repo: https://github.com/gitleaks/gitleaks
