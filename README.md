@@ -111,6 +111,11 @@ bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 (pinned commit, verifi
 Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact
 `uv sync` uninstalls the engine's dependencies again (re-run the script if you do).
 
+The script clones the pinned engine fresh on every run (commit and tree are checked, the
+requirements are hash-locked) and moves any existing `Zircolite/` aside to
+`Zircolite.old.<timestamp>` instead of trusting or deleting it. sigmaforge does not re-verify the
+engine at run time: the check happens at setup only.
+
 Then obtain the corpora (see the table above) into `~/sigmaforge-v0/` and build the
 combined samples with the `scripts/build_*_benign.py` / `scripts/build_*_corpus.py`
 helpers, compile the ruleset, and run a backtest:

@@ -150,6 +150,9 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    if not args.targets.is_file():
+        print(f"[FATAL] --targets file missing: {str(args.targets)!r} (default: data/optc_targets.json).", flush=True)
+        return 2
     if not COMBINED.exists():
         print(f"[FATAL] {COMBINED} missing — run6 corpus required as the append base.", flush=True)
         return 2

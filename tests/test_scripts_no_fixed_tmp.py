@@ -40,3 +40,18 @@ def test_former_tmp_readers_take_arguments():
 
 def test_summary_files_are_gitignored():
     assert "reports/_*_summary.json" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_pull_optc_missing_targets_is_a_clean_one_line_exit_2(tmp_path, monkeypatch, capsys):
+    import importlib
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "gdown", types.ModuleType("gdown"))
+    monkeypatch.syspath_prepend(str(ROOT))
+    mod = importlib.import_module("scripts.pull_optc_fullweek")
+    missing = tmp_path / "no\x1b[31m-such.json"
+    monkeypatch.setattr(sys, "argv", ["pull_optc_fullweek.py", "--targets", str(missing)])
+    assert mod.main() == 2
+    out = capsys.readouterr().out
+    assert len(out.strip().splitlines()) == 1 and "--targets file missing" in out and "\x1b" not in out
