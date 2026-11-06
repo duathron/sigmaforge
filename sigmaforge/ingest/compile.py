@@ -15,11 +15,15 @@ so callers (and tests) can import `compile_ruleset` even when the engine is abse
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import logging
 import shutil
 import sys
 import tempfile
+import warnings
+from collections.abc import Iterator
 from pathlib import Path
 
 from sigmaforge.engine import EngineNotFoundError, require_engine_home
@@ -75,6 +79,45 @@ def _engine_logger() -> logging.Logger:
     return logging.getLogger("compile_loaded_ruleset")
 
 
+def _sanitizing_handler(stream) -> logging.Handler:
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(_SanitizingFormatter())
+    return handler
+
+
+@contextlib.contextmanager
+def _captured_engine_output() -> Iterator[None]:
+    """Capture EVERY output channel of the in-process engine work (stdout, stderr, warnings) and
+    route the logging fallbacks (`logging.lastResort`, the root logger) through the sanitizer.
+    Everything is restored on exit. Success: captured text is discarded. Failure: a short
+    sanitized tail (5 lines / 600 chars) goes to the real stderr before the error propagates."""
+    real_err = sys.stderr
+    out, err = io.StringIO(), io.StringIO()
+    root = logging.getLogger()
+    saved_root_handlers = root.handlers
+    saved_last_resort = logging.lastResort
+    last_resort = _sanitizing_handler(real_err)
+    last_resort.setLevel(logging.WARNING)
+    caught: list[warnings.WarningMessage] = []
+    try:
+        with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(out):
+            with contextlib.redirect_stderr(err):
+                warnings.simplefilter("always")
+                logging.lastResort = last_resort
+                root.handlers = [_sanitizing_handler(real_err)]
+                yield
+    except BaseException:
+        parts = [err.getvalue(), out.getvalue(), "\n".join(str(w.message) for w in caught)]
+        text = next((p.strip() for p in parts if p.strip()), "")
+        tail = "\n".join(text.splitlines()[-5:])[-600:]
+        if tail:
+            real_err.write(plain_safe(tail) + "\n")
+        raise
+    finally:
+        root.handlers = saved_root_handlers
+        logging.lastResort = saved_last_resort
+
+
 def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) -> tuple[list[dict], int]:
     """Convert exactly `paths` through Zircolite's pySigma sqlite backend.
 
@@ -87,30 +130,30 @@ def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) ->
     engine = (home / "Zircolite").resolve()
     _refuse_foreign_zircolite(engine)
     _ensure_engine_on_path(home)
-    from zircolite import config as zconfig
-    from zircolite.config import RulesetConfig
-    from zircolite.rules import RulesetHandler
-
-    if not Path(zconfig.__file__).resolve().is_relative_to(engine):
-        raise EngineNotFoundError(f"zircolite was imported from {zconfig.__file__}, not from {engine}")
-
     logger = _engine_logger()
+    with _captured_engine_output():
+        from zircolite import config as zconfig
+        from zircolite.config import RulesetConfig
+        from zircolite.rules import RulesetHandler
 
-    with tempfile.TemporaryDirectory(prefix="sigmaforge_loaded_") as tmp:
-        stage = Path(tmp)
-        for p in paths:
-            # flat-stage with a unique name so rglob('*.yml') in the converter
-            # picks up exactly these and nothing else.
-            shutil.copy2(p, stage / p.name)
-        n_staged = len(list(stage.glob("*.yml")))
+        if not Path(zconfig.__file__).resolve().is_relative_to(engine):
+            raise EngineNotFoundError(f"zircolite was imported from {zconfig.__file__}, not from {engine}")
 
-        cfg = RulesetConfig(
-            ruleset=[str(stage)],
-            pipeline=[[PIPELINE]],
-            save_ruleset=False,
-        )
-        handler = RulesetHandler(ruleset_config=cfg, logger=logger)
-        # .rulesets IS the converted Zircolite-format list (same shape as
-        # rules_windows_sysmon.json). Deep-copy by re-serialising to be safe.
-        ruleset = json.loads(json.dumps(handler.rulesets))
+        with tempfile.TemporaryDirectory(prefix="sigmaforge_loaded_") as tmp:
+            stage = Path(tmp)
+            for p in paths:
+                # flat-stage with a unique name so rglob('*.yml') in the converter
+                # picks up exactly these and nothing else.
+                shutil.copy2(p, stage / p.name)
+            n_staged = len(list(stage.glob("*.yml")))
+
+            cfg = RulesetConfig(
+                ruleset=[str(stage)],
+                pipeline=[[PIPELINE]],
+                save_ruleset=False,
+            )
+            handler = RulesetHandler(ruleset_config=cfg, logger=logger)
+            # .rulesets IS the converted Zircolite-format list (same shape as
+            # rules_windows_sysmon.json). Deep-copy by re-serialising to be safe.
+            ruleset = json.loads(json.dumps(handler.rulesets))
     return ruleset, n_staged

@@ -33,10 +33,23 @@ class RulesetConfig:
         self.ruleset = ruleset
 PYEOF
 cat >"$FAKE_ENGINE/Zircolite/zircolite/rules.py" <<'PYEOF'
+import logging
+import sys
+import warnings
+
+
 class RulesetHandler:
     def __init__(self, ruleset_config, logger):
         title = "[/x][bold]PASS\x1b]0;t\x07 | 9 | 9\n## forged"
         logger.info("converted %s", title)
+        # every other channel an engine can write to: other logger, root logger, warnings, print
+        lg = logging.getLogger("dogfood.other")
+        lg.propagate = False
+        lg.warning("C %s", title)
+        logging.warning("D %s", title)
+        warnings.warn("E " + title)
+        print("F " + title)
+        print("G " + title, file=sys.stderr)
         self.rulesets = [{"title": title}]
 PYEOF
 cat >"$FAKE_ENGINE/Zircolite/zircolite.py" <<'PYEOF'
