@@ -1,7 +1,7 @@
 """sigmaforge — CLI entry point.
 
 Exit-code table (canonical, owned here):
-  0 ok · 1 engine-failed · 2 usage · 3 no-engine · 4 no-corpus/missing-inputs · 5 gate-FAIL.
+  0 ok · 1 engine-failed · 2 usage/unusable-config · 3 no-engine · 4 no-corpus/missing-inputs · 5 gate-FAIL.
 """
 
 from __future__ import annotations
@@ -14,9 +14,11 @@ from rich.console import Console
 from shipwright_kit.cli import build_typer
 
 from sigmaforge import __version__
+from sigmaforge.config import ConfigError
 from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
 from sigmaforge.ingest.ruleload import RuleLoadError
 from sigmaforge.ingest.zircolite_runner import EngineRunError
+from sigmaforge.pipeline import InputLoadError
 from sigmaforge.safe_text import markup_escape, plain_safe, plain_safe_capped
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
@@ -62,6 +64,19 @@ def _engine_failed(err: Exception) -> NoReturn:
     raise typer.Exit(1) from None
 
 
+def _load_cfg(config: Optional[str]):
+    """Resolve the config; a broken config file is ONE clean line (exit 2), never a traceback."""
+    from sigmaforge.config import load as load_config
+
+    try:
+        return load_config(Path(config) if config else None)
+    except ConfigError as e:
+        console.print(
+            f"[red]Cannot load config file[/red] {_rich_safe(e.path)}: {_err_safe(e)}", soft_wrap=True, highlight=False
+        )
+        raise typer.Exit(2) from None
+
+
 @app.command()
 def backtest(
     rules: Optional[str] = typer.Option(None, help="Source Sigma rules (.yml file OR dir). Default from config."),
@@ -83,10 +98,9 @@ def backtest(
     """
     import json
 
-    from sigmaforge.config import load as load_config
     from sigmaforge.pipeline import PipelineConfig, run_backtest_pipeline
 
-    cfg = load_config(Path(config) if config else None)
+    cfg = _load_cfg(config)
     bt = cfg.backtest
 
     # Resolve effective inputs: flags > config > None.
@@ -168,6 +182,11 @@ def backtest(
             f"[red]Cannot load rule file[/red] {_rich_safe(e.path)}: {_err_safe(e)}", soft_wrap=True, highlight=False
         )
         raise typer.Exit(4) from None
+    except InputLoadError as e:
+        console.print(
+            f"[red]Cannot load {e.what}[/red] {_rich_safe(e.path)}: {_err_safe(e)}", soft_wrap=True, highlight=False
+        )
+        raise typer.Exit(4) from None
     except AssertionError as e:
         # FIX H acceptance gate FAILED — a real engine/scored discrepancy. Surface as the
         # canonical gate-FAIL exit code, not a traceback.
@@ -230,11 +249,10 @@ def hunt(
     import tempfile
     from collections import Counter
 
-    from sigmaforge.config import load as load_config
     from sigmaforge.ingest.compile import compile_ruleset
     from sigmaforge.ingest.zircolite_runner import run_shard
 
-    cfg = load_config(Path(config) if config else None)
+    cfg = _load_cfg(config)
 
     # --- Preflight: engine resolvable? (no corpora required — this is the pip path) ---
     engine_root = resolve_engine_home(engine_home if engine_home is not None else cfg.backtest.engine_home)
