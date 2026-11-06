@@ -1,3 +1,19 @@
+import re
+
+from shipwright_kit.security.render import safe_render
+
+
+def _md_cell(text) -> str:
+    """Neutralize an untrusted value for a Markdown line or table cell: control/ANSI/bidi
+    characters stripped, line breaks and tabs flattened to a space, backslashes doubled (so a
+    trailing or doubled backslash cannot escape what follows), `&` written as `&amp;` (so a literal
+    entity in a title stays literal) and pipes encoded as `&#124;` (not a column separator in
+    any GFM parser, renders as `|`). Does NOT neutralize Markdown
+    links or HTML in the value: known-open, documented in the manual."""
+    flat = re.sub(r"[\r\n\t]+", " ", safe_render(str(text), escape_markup=False))
+    return flat.replace("\\", "\\\\").replace("&", "&amp;").replace("|", "&#124;")
+
+
 def _with_reason(value, reason: str | None):
     """C2: append the reason-code inline when a cell is unmeasured, e.g.
     ``unmeasured (technique-0-events)``. A measured (numeric) value is unchanged."""
@@ -24,18 +40,19 @@ def render_report(
     `caveats` (C2) is a DATA dict (floor, recommended_floor, corpus path-form split, ...)
     rendered into a Caveats block — run-specific provenance is passed as data, not as a
     hardcoded prose string lifted from a script header."""
+    src = _md_cell(source)  # display only; `source` itself stays the raw row-key suffix
     lines = [
-        f"# Sigmaforge backtest report ({source})",
+        f"# Sigmaforge backtest report ({src})",
         "",
         *([f"_run hash (worker-invariant): `{run_hash}`_", ""] if run_hash else []),
-        f"> Precision is **precision@{source}**, measured on the benign corpus described below "
+        f"> Precision is **precision@{src}**, measured on the benign corpus described below "
         f"— not a general/cross-environment false-positive rate. "
         f"Labels are NOISY ground truth (rule-pattern attributions, e.g. OneDrive.exe tagged "
         f"as an ATT&CK technique), so a measured FP may be a mislabel. Recall is measured on "
         f"the labeled native-EVTX attack corpora over PROCESS-CREATION events only (the loaded "
         f"ruleset is 100% process_creation). Precision floor: {min_events} evaluated events.",
-        *([f"> **Benign corpus composition:** {corpus_note}"] if corpus_note else []),
-        *([f"> **Recall method (FIX B):** {recall_note}"] if recall_note else []),
+        *([f"> **Benign corpus composition:** {_md_cell(corpus_note)}"] if corpus_note else []),
+        *([f"> **Recall method (FIX B):** {_md_cell(recall_note)}"] if recall_note else []),
         "",
         "> **Precision tautology caveat (BLOCKER-2):** a rule showing precision = 1.0 with fp = 0 "
         "is only trustworthy if benign-labelled events actually matched its selection. Rules whose "
@@ -53,7 +70,7 @@ def render_report(
         "## Per-rule",
         "",
         "| rule | recall | precision@"
-        + source
+        + src
         + " | tp | fp | events_evaluated | benign_events_evaluated | precision_signal |",
         "|---|---|---|---|---|---|---|---|",
     ]
@@ -70,7 +87,7 @@ def render_report(
         recall_cell = _with_reason(r.get("recall"), r.get("recall_reason"))
         prec_cell = _with_reason(prec, r.get("precision_reason"))
         lines.append(
-            f"| {r.get('rule')} | {recall_cell} | {prec_cell} "
+            f"| {_md_cell(r.get('rule'))} | {_md_cell(recall_cell)} | {_md_cell(prec_cell)} "
             f"| {r.get('tp')} | {r.get('fp')} | {r.get('events_evaluated')} "
             f"| {r.get('benign_events_evaluated', 'n/a')} | {signal} |"
         )
@@ -80,7 +97,7 @@ def render_report(
     if noisy:
         for r in sorted(noisy, key=lambda x: -x["fp"]):
             lines.append(
-                f"- **{r.get('rule')}** catches the attack but fires {r['fp']}x on benign "
+                f"- **{_md_cell(r.get('rule'))}** catches the attack but fires {r['fp']}x on benign "
                 f"activity — candidate for tightening."
             )
     else:
@@ -92,7 +109,7 @@ def render_report(
     if tautology:
         for r in sorted(tautology, key=lambda x: str(x.get("rule"))):
             lines.append(
-                f"- **{r.get('rule')}** reports precision@{source} = {r.get(f'precision@{source}')} "
+                f"- **{_md_cell(r.get('rule'))}** reports precision@{src} = {r.get(f'precision@{source}')} "
                 f"with fp = {r.get('fp')}, but **0 benign-labelled events matched its selection** — "
                 f"fp = 0 is true by construction. No FP-resistance is demonstrated; precision is "
                 f"effectively unmeasured for FP purposes."
@@ -112,9 +129,9 @@ def render_report(
                 f"- Recommended floor for a stable precision estimate: **{caveats['recommended_floor']}** events."
             )
         if caveats.get("path_form_split"):
-            lines.append(f"- Corpus path-form note: {caveats['path_form_split']}")
+            lines.append(f"- Corpus path-form note: {_md_cell(caveats['path_form_split'])}")
         # render any further provenance keys generically (data, not hardcoded prose)
         for k, v in caveats.items():
             if k not in ("floor", "recommended_floor", "path_form_split"):
-                lines.append(f"- {k}: {v}")
+                lines.append(f"- {_md_cell(k)}: {_md_cell(v)}")
     return "\n".join(lines)

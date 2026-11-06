@@ -1,7 +1,7 @@
 """sigmaforge — CLI entry point.
 
 Exit-code table (canonical, owned here):
-  0 ok · 2 usage · 3 no-engine · 4 no-corpus/missing-inputs · 5 gate-FAIL.
+  0 ok · 1 engine-failed · 2 usage · 3 no-engine · 4 no-corpus/missing-inputs · 5 gate-FAIL.
 """
 
 from __future__ import annotations
@@ -11,14 +11,25 @@ from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from shipwright_kit.cli import build_typer
 
 from sigmaforge import __version__
 from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
+from sigmaforge.ingest.ruleload import RuleLoadError
+from sigmaforge.ingest.zircolite_runner import EngineRunError
+from sigmaforge.safe_text import markup_escape, plain_safe, plain_safe_capped
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
-console = Console()
+app.pretty_exceptions_show_locals = False  # a traceback must never dump locals (rule text, paths)
+console = Console(emoji=False)
+
+
+def _rich_safe(x: object) -> str:
+    """Untrusted single-line text for a Rich markup sink: line breaks and tabs flattened to a
+    space (no forged output lines), control/ANSI/bidi stripped, then markup escaped.
+    Not `safe_render(x)` alone: that doubles backslashes (Windows paths) on the console.
+    Print the result with `soft_wrap=True` so Rich cannot re-wrap it into a new line start."""
+    return markup_escape(plain_safe(x))
 
 
 @app.command()
@@ -32,11 +43,23 @@ def manual() -> None:
     console.print(Markdown(text))
 
 
+def _err_safe(x: object) -> str:
+    """An untrusted ERROR message for a Rich sink: single line, sanitized, capped at 600 characters
+    (a multi-megabyte message must not hang the console)."""
+    return markup_escape(plain_safe_capped(x))
+
+
 def _engine_refused(err: Exception) -> NoReturn:
     """The engine could not be used safely (e.g. a foreign `zircolite` already imported)."""
-    console.print(f"[red]Detection engine refused[/red]: {escape(str(err))}")
+    console.print(f"[red]Detection engine refused[/red]: {_err_safe(err)}", soft_wrap=True, highlight=False)
     console.print("Point --engine-home / SIGMAFORGE_HOME at the engine root, in a fresh process.")
     raise typer.Exit(3) from None
+
+
+def _engine_failed(err: Exception) -> NoReturn:
+    """The engine ran but failed. Its output is captured, never streamed; show a short tail."""
+    console.print(f"[red]Detection engine failed[/red]: {_err_safe(err)}", soft_wrap=True, highlight=False)
+    raise typer.Exit(1) from None
 
 
 @app.command()
@@ -138,10 +161,17 @@ def backtest(
         res = run_backtest_pipeline(pcfg)
     except EngineNotFoundError as e:
         _engine_refused(e)
+    except EngineRunError as e:
+        _engine_failed(e)
+    except RuleLoadError as e:
+        console.print(
+            f"[red]Cannot load rule file[/red] {_rich_safe(e.path)}: {_err_safe(e)}", soft_wrap=True, highlight=False
+        )
+        raise typer.Exit(4) from None
     except AssertionError as e:
         # FIX H acceptance gate FAILED — a real engine/scored discrepancy. Surface as the
         # canonical gate-FAIL exit code, not a traceback.
-        console.print(f"[red]Acceptance gate FAILED[/red]: {e}")
+        console.print(f"[red]Acceptance gate FAILED[/red]: {_err_safe(e)}", soft_wrap=True, highlight=False)
         raise typer.Exit(5) from None
 
     # Never silently pooled-recall: refuse a run that fell back to the pooled denominator.
@@ -158,8 +188,8 @@ def backtest(
     out_path.write_text(res.report_md)
     manifest_path = out_path.with_suffix(".manifest.json")
     manifest_path.write_text(json.dumps(res.manifest, indent=2, sort_keys=True))
-    console.print(f"report written: {out_path}")
-    console.print(f"manifest written: {manifest_path}")
+    console.print(f"report written: {_rich_safe(out_path)}", soft_wrap=True)
+    console.print(f"manifest written: {_rich_safe(manifest_path)}", soft_wrap=True)
     console.print(
         f"loaded={res.loaded_rule_count} recall-measurable={res.rules_recall_measurable} "
         f"precision-measurable={res.rules_precision_measurable} run_hash={res.run_hash}"
@@ -227,6 +257,8 @@ def hunt(
         compiled, _n_staged = compile_ruleset(rule_files, engine_home=str(engine_root))
     except EngineNotFoundError as e:
         _engine_refused(e)
+    except EngineRunError as e:  # EngineCompileError: the in-process compile raised
+        _engine_failed(e)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(compiled, fh)
         ruleset_path = fh.name
@@ -238,14 +270,17 @@ def hunt(
 
     logs_path = Path(logs)
     evtx = _is_evtx_logs(logs_path)
-    matches = run_shard(
-        str(logs_path),
-        ruleset_path,
-        mapping_path=mapping_path,
-        json_input=not evtx,
-        xml_input=evtx,
-        engine_home=str(engine_root),
-    )
+    try:
+        matches = run_shard(
+            str(logs_path),
+            ruleset_path,
+            mapping_path=mapping_path,
+            json_input=not evtx,
+            xml_input=evtx,
+            engine_home=str(engine_root),
+        )
+    except EngineRunError as e:
+        _engine_failed(e)
 
     counts = Counter((m.rule_id, m.event_id) for m in matches)
     hits = [{"rule_id": rid, "event_id": eid, "count": n} for (rid, eid), n in sorted(counts.items())]
@@ -264,7 +299,10 @@ def hunt(
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True))
 
     console.print(f"[yellow]{_HUNT_BANNER}[/yellow]")
-    console.print(f"hits written: {out_path} ({len(hits)} hit(s), {len(compiled)} rule(s) compiled)")
+    console.print(
+        f"hits written: {_rich_safe(out_path)} ({len(hits)} hit(s), {len(compiled)} rule(s) compiled)",
+        soft_wrap=True,
+    )
 
 
 def main() -> None:

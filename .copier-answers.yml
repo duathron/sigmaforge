@@ -2,7 +2,7 @@
 # It records the answers used to scaffold this project so that
 # `copier update` can pull later improvements from the Shipwright template.
 _commit: v0.7.0
-_src_path: /Users/christianhuhn/PycharmProjects/ai_project1/shipwright
+_src_path: gh:duathron/shipwright
 author_email: duathron@gmail.com
 author_name: Christian Huhn
 cli_command: sigmaforge

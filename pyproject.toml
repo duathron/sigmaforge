@@ -21,11 +21,24 @@ dependencies = [
 [tool.shipwright]
 preset = "security"
 
+[project.urls]
+Homepage = "https://github.com/duathron/sigmaforge"
+Repository = "https://github.com/duathron/sigmaforge"
+Issues = "https://github.com/duathron/sigmaforge/issues"
+Changelog = "https://github.com/duathron/sigmaforge/blob/main/CHANGELOG.md"
+
 [project.scripts]
 sigmaforge = "sigmaforge.main:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.8", "pre-commit>=4.0", "hypothesis>=6.0"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+    "pre-commit>=4.0",
+    "hypothesis>=6.0",
+    "markdown>=3.11.2",
+    "markdown-it-py>=4.2.0",
+]
 # Deps the corpus-building / backtest SCRIPTS need (not the shipped library). The
 # Zircolite engine itself + its own requirements are installed by scripts/setup_engine.sh.
 # Install with: uv sync --group backtest

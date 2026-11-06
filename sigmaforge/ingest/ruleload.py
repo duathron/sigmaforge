@@ -14,3 +14,12 @@ def partition_rules(rules: list[dict], levels: tuple[str, ...] = ("high", "criti
     loaded = [r for r in in_scope if not _is_stateful(r)]
     excluded = [r for r in in_scope if _is_stateful(r)]
     return loaded, excluded
+
+
+class RuleLoadError(ValueError):
+    """A rule file could not be read or parsed. `path` is the offending file (untrusted text:
+    sanitize at the sink); the message is value-free (no YAML snippet, which echoes rule text)."""
+
+    def __init__(self, path: str, reason: str):
+        super().__init__(reason)
+        self.path = path

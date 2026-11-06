@@ -17,6 +17,10 @@ from sigmaforge.records import MatchRecord
 # appended. Setting it is an explicit trust decision about your environment.
 
 
+class EngineRunError(RuntimeError):
+    """The engine process failed; the message carries a short, UNSANITIZED stderr tail."""
+
+
 def _engine_cmd() -> list[str]:
     """Interpreter prefix of the engine command, built at call time (no import-time state)."""
     override = os.environ.get("SIGMAFORGE_ZIRCOLITE")
@@ -107,11 +111,24 @@ def run_shard(
         cmd += ["--xml-input"]
     if mapping_path:
         cmd += ["--config", mapping_path]
-    subprocess.run(cmd, check=True, cwd=str(home))
-    with open(out) as fh:
-        return parse_detections(
-            json.load(fh),
-            corpus_label=corpus_label,
-            file_technique_map=file_technique_map,
-            event_technique_out=event_technique_out,
-        )
+    # The engine echoes rule titles (attacker text) to its own stdout/stderr: capture both so
+    # raw terminal escapes / Rich markup never reach the user's tty. Nothing is streamed on
+    # success; on failure only a short tail of stderr is surfaced (sanitized by the CLI).
+    try:
+        subprocess.run(cmd, check=True, cwd=str(home), capture_output=True, text=True, errors="replace")
+    except subprocess.CalledProcessError as e:
+        # stderr tail; stdout when the engine wrote nothing to stderr
+        src = (e.stderr or "").strip() or (e.stdout or "").strip()
+        tail = "\n".join(src.splitlines()[-5:])[-550:]  # + prefix stays inside the 600-char error cap
+        raise EngineRunError(f"engine exited with status {e.returncode}: {tail}") from None
+    try:
+        with open(out) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):  # exit 0 but no/invalid detection file: value-free message
+        raise EngineRunError("engine exited 0 but wrote no valid detection output") from None
+    return parse_detections(
+        doc,
+        corpus_label=corpus_label,
+        file_technique_map=file_technique_map,
+        event_technique_out=event_technique_out,
+    )

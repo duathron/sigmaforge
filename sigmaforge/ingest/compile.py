@@ -15,14 +15,21 @@ so callers (and tests) can import `compile_ruleset` even when the engine is abse
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import logging
 import shutil
 import sys
 import tempfile
+import warnings
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from sigmaforge.engine import EngineNotFoundError, require_engine_home
+from sigmaforge.ingest.zircolite_runner import EngineRunError
+from sigmaforge.safe_text import plain_safe, plain_safe_capped
 
 #: Zircolite pySigma pipeline name (matches the bundled snapshot's conversion).
 PIPELINE = "sysmon"
@@ -49,6 +56,100 @@ def _refuse_foreign_zircolite(engine: Path) -> None:
                 raise EngineNotFoundError(f"{name} was already imported from {loc}, not from {engine}")
 
 
+# Logger namespaces that can carry rule text. pySigma/Zircolite are not installed where this was
+# written, so the sigma names are the documented-convention set, not measured: keep it generous.
+ENGINE_LOGGERS = ("zircolite", "sigma", "pysigma", "pySigma", "compile_loaded_ruleset")
+
+
+class _SanitizingFormatter(logging.Formatter):
+    """Engine log lines carry rule-derived (attacker) text: flatten + strip before stderr."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return plain_safe(record.getMessage())
+
+
+def _engine_logger() -> logging.Logger:
+    """The engine's loggers write to stderr through a sanitizing handler; the root logger is
+    never configured (no global side effect, no raw `basicConfig` handler)."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(_SanitizingFormatter())
+    for name in ENGINE_LOGGERS:
+        lg = logging.getLogger(name)
+        lg.handlers = [handler]
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
+    return logging.getLogger("compile_loaded_ruleset")
+
+
+class EngineCompileError(EngineRunError):
+    """The in-process rule compiler raised. The message is already sanitized (single line, no
+    control characters): the engine's own exception text is rule-derived, so it is never re-raised."""
+
+
+def _sanitizing_handler(stream) -> logging.Handler:
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(_SanitizingFormatter())
+    return handler
+
+
+def _translate(exc, err, out, caught, real_err) -> EngineCompileError | None:
+    """The sanitized replacement for an engine exception (None: let it propagate unchanged).
+    May raise on a hostile exception object; the caller turns that into a constant message."""
+    if isinstance(exc, KeyboardInterrupt):
+        return None
+    parts = [err.getvalue(), out.getvalue(), "\n".join(str(w.message) for w in caught)]
+    text = next((p.strip() for p in parts if p.strip()), "")
+    tail = "\n".join(text.splitlines()[-5:])[-600:]
+    if tail:
+        real_err.write(plain_safe(tail) + "\n")
+    if isinstance(exc, EngineNotFoundError):
+        return None
+    if isinstance(exc, SystemExit):
+        # any exit inside the compile means no ruleset: never let it pass as success
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else "text")
+        return EngineCompileError(f"engine exited during compile (code {code})")
+    return EngineCompileError(plain_safe_capped(str(exc)))
+
+
+def _run_captured(work: Callable[[], Any]) -> Any:
+    """Run `work` with the Python-level output channels of the in-process engine captured
+    (stdout, stderr, warnings) and the logging fallbacks (`logging.lastResort`, the root logger)
+    routed through the sanitizer. Everything is restored on exit. Success: captured text is
+    discarded. Failure: a short sanitized tail (5 lines / 600 chars) goes to the real stderr,
+    then the engine's exception is replaced by a package-owned `EngineCompileError` with a
+    sanitized, capped message (SystemExit included). Hand-rolled try/except, not a generator
+    context manager, so the translation is total even for an exception that breaks `isinstance`.
+    Scope: Python-level stdout/stderr, warnings and logging (what Zircolite v3.7.6 uses).
+    fd-level writes (os.write, sys.__stdout__/__stderr__), rebinding, inherited-fd subprocesses
+    and post-return threads/atexit are NOT captured (known open)."""
+    real_err = sys.stderr
+    out, err = io.StringIO(), io.StringIO()
+    root = logging.getLogger()
+    saved_root_handlers = root.handlers
+    saved_last_resort = logging.lastResort
+    last_resort = _sanitizing_handler(real_err)
+    last_resort.setLevel(logging.WARNING)
+    caught: list[warnings.WarningMessage] = []
+    try:
+        with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(out):
+            with contextlib.redirect_stderr(err):
+                warnings.simplefilter("always")
+                logging.lastResort = last_resort
+                root.handlers = [_sanitizing_handler(real_err)]
+                return work()
+    except BaseException as exc:
+        try:
+            translated = _translate(exc, err, out, caught, real_err)
+        except BaseException:  # the translation is total: a hostile exception cannot escape it
+            translated = EngineCompileError("engine failed during compile")
+        if translated is None:
+            raise
+        raise translated from None
+    finally:
+        root.handlers = saved_root_handlers
+        logging.lastResort = saved_last_resort
+
+
 def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) -> tuple[list[dict], int]:
     """Convert exactly `paths` through Zircolite's pySigma sqlite backend.
 
@@ -61,31 +162,33 @@ def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) ->
     engine = (home / "Zircolite").resolve()
     _refuse_foreign_zircolite(engine)
     _ensure_engine_on_path(home)
-    from zircolite import config as zconfig
-    from zircolite.config import RulesetConfig
-    from zircolite.rules import RulesetHandler
+    logger = _engine_logger()
 
-    if not Path(zconfig.__file__).resolve().is_relative_to(engine):
-        raise EngineNotFoundError(f"zircolite was imported from {zconfig.__file__}, not from {engine}")
+    def work() -> tuple[list[dict], int]:
+        from zircolite import config as zconfig
+        from zircolite.config import RulesetConfig
+        from zircolite.rules import RulesetHandler
 
-    logger = logging.getLogger("compile_loaded_ruleset")
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+        if not Path(zconfig.__file__).resolve().is_relative_to(engine):
+            raise EngineNotFoundError(f"zircolite was imported from {zconfig.__file__}, not from {engine}")
 
-    with tempfile.TemporaryDirectory(prefix="sigmaforge_loaded_") as tmp:
-        stage = Path(tmp)
-        for p in paths:
-            # flat-stage with a unique name so rglob('*.yml') in the converter
-            # picks up exactly these and nothing else.
-            shutil.copy2(p, stage / p.name)
-        n_staged = len(list(stage.glob("*.yml")))
+        with tempfile.TemporaryDirectory(prefix="sigmaforge_loaded_") as tmp:
+            stage = Path(tmp)
+            for p in paths:
+                # flat-stage with a unique name so rglob('*.yml') in the converter
+                # picks up exactly these and nothing else.
+                shutil.copy2(p, stage / p.name)
+            n_staged = len(list(stage.glob("*.yml")))
 
-        cfg = RulesetConfig(
-            ruleset=[str(stage)],
-            pipeline=[[PIPELINE]],
-            save_ruleset=False,
-        )
-        handler = RulesetHandler(ruleset_config=cfg, logger=logger)
-        # .rulesets IS the converted Zircolite-format list (same shape as
-        # rules_windows_sysmon.json). Deep-copy by re-serialising to be safe.
-        ruleset = json.loads(json.dumps(handler.rulesets))
-    return ruleset, n_staged
+            cfg = RulesetConfig(
+                ruleset=[str(stage)],
+                pipeline=[[PIPELINE]],
+                save_ruleset=False,
+            )
+            handler = RulesetHandler(ruleset_config=cfg, logger=logger)
+            # .rulesets IS the converted Zircolite-format list (same shape as
+            # rules_windows_sysmon.json). Deep-copy by re-serialising to be safe.
+            ruleset = json.loads(json.dumps(handler.rulesets))
+            return ruleset, n_staged
+
+    return _run_captured(work)

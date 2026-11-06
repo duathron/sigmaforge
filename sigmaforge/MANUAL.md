@@ -90,9 +90,10 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 | Code | Meaning |
 |------|---------|
 | 0 | success |
+| 1 | the engine failed: its process exited non-zero, or the in-process rule compile raised or exited (a short, sanitized tail of its output is shown) |
 | 2 | usage error (bad/missing flags) |
 | 3 | engine not found or `--engine-home` / `engine_home` empty — run `scripts/setup_engine.sh` (then `--engine-home`, config `engine_home` or `$SIGMAFORGE_HOME`) |
-| 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora |
+| 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora; also `backtest` when a rule file cannot be read or parsed (one line naming the file) |
 | 5 | acceptance gate FAILED (engine fires ≠ scored fires) |
 
 Codes 3 and 4 are **teaching errors**: they name what to run and never print a
@@ -162,6 +163,36 @@ appended, and the engine runs with its own root as working directory.
 treated as your own trusted environment: whatever they point at is executed with your
 privileges. A relative `SIGMAFORGE_HOME` resolves against the current directory, so
 prefer an absolute path. Do not set them from untrusted input.
+
+**Engine output is not streamed.** The engine subprocess's stdout and stderr are captured: rule
+titles are untrusted text and the engine echoes them. On success nothing from the engine is
+printed; on failure only a short sanitized tail of its stderr (stdout when stderr is empty) is
+shown. While the rule compiler runs in-process, its Python-level stdout and stderr, warnings and
+logging (what Zircolite v3.7.6 uses) are captured: output is discarded on success, and log records
+(the engine's own loggers, the root logger and loggers without handlers) are flattened to one line
+and stripped of control characters before they reach stderr. If the compile fails, a short
+sanitized tail of the captured text is printed to stderr and `hunt` reports
+`Detection engine failed` with a sanitized one-line message (exit 1); the engine's own exception
+text is never printed raw.
+
+Known open: writes below the Python level are not captured (`os.write`, `sys.__stdout__` /
+`sys.__stderr__`, rebinding of `sys.stdout`, subprocesses that inherit the file descriptors, and
+threads or `atexit` hooks that outlive the call). Only a malicious engine can use them, and a
+malicious engine already runs with your privileges.
+There is also no timeout on the engine subprocess: a hung engine hangs the command.
+
+Error messages from the engine are cut at about 600 characters (a `[truncated]` marker shows a cut; escaping square brackets for the terminal can make the printed line somewhat longer),
+and a detection file that is missing or not valid JSON after an exit status of 0 is reported as
+`Detection engine failed` (exit 1).
+
+**Untrusted rule text.** Rule titles and other rule-derived text are escaped at the terminal
+(Rich markup, control characters, line breaks) and in the Markdown report (control
+characters and line breaks removed, `|` written as `&#124;`, backslashes doubled). `&` is written as `&amp;`, so a literal `&#124;` typed in a title is displayed as typed. Markdown links and HTML inside a rule title are **not** neutralised: treat a report built from
+untrusted rules as untrusted Markdown when you render it.
+
+The escaping targets GitHub (cmark-gfm), markdown-it and Python-Markdown, which render `|` and
+`&` correctly from `&#124;` and `&amp;`. mistune shows the literal entities instead: a known
+trade-off.
 
 ## Reproduce a backtest
 
