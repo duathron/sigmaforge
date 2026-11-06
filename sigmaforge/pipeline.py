@@ -92,20 +92,43 @@ class InputLoadError(ValueError):
         self.what = what
 
 
+def _limit_error(path: object, what: str, e: BaseException) -> InputLoadError:
+    """Depth, size or int-conversion limits hit while parsing (value-free reason)."""
+    if isinstance(e, RecursionError):
+        return InputLoadError(path, what, "too deeply nested")
+    if isinstance(e, MemoryError):
+        return InputLoadError(path, what, "too large")
+    return InputLoadError(path, what, "value out of range")
+
+
+def _is_int(x: object) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _tmap_ok(tmap: object) -> bool:
+    if not isinstance(tmap, dict):
+        return False
+    counts, files, total = tmap.get("technique_event_counts"), tmap.get("file_technique"), tmap.get("total_pc")
+    return (
+        isinstance(counts, dict)
+        and all(isinstance(k, str) and _is_int(v) for k, v in counts.items())
+        and isinstance(files, dict)
+        and all(isinstance(k, str) and isinstance(v, str) for k, v in files.items())
+        and _is_int(total)
+    )
+
+
 def _load_technique_map(path: str) -> dict:
     what = "technique map"
     try:
         tmap = json.loads(Path(path).read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         raise InputLoadError(path, what, "invalid JSON") from None
-    except (OSError, ValueError):  # missing/unreadable, or not valid UTF-8 text
+    except (OSError, UnicodeDecodeError):  # missing/unreadable, or not valid UTF-8 text
         raise InputLoadError(path, what, "unreadable") from None
-    if (
-        not isinstance(tmap, dict)
-        or not isinstance(tmap.get("technique_event_counts"), dict)
-        or not isinstance(tmap.get("file_technique"), dict)
-        or not isinstance(tmap.get("total_pc"), int)
-    ):
+    except (RecursionError, MemoryError, ValueError) as e:
+        raise _limit_error(path, what, e) from None
+    if not _tmap_ok(tmap):
         raise InputLoadError(path, what, "malformed structure")
     return tmap
 
@@ -117,14 +140,16 @@ def _load_comiset_field_map(comiset_mapping: str) -> dict[str, str]:
             cfg = yaml.safe_load(fh)
     except yaml.YAMLError:
         raise InputLoadError(comiset_mapping, what, "invalid YAML") from None
-    except (OSError, ValueError):  # missing/unreadable, or not valid UTF-8 text
+    except (OSError, UnicodeDecodeError):  # missing/unreadable, or not valid UTF-8 text
         raise InputLoadError(comiset_mapping, what, "unreadable") from None
+    except (RecursionError, MemoryError, ValueError) as e:
+        raise _limit_error(comiset_mapping, what, e) from None
     mappings = cfg.get("mappings") if isinstance(cfg, dict) else None
     if not isinstance(cfg, dict) or not (mappings is None or isinstance(mappings, dict)):
         raise InputLoadError(comiset_mapping, what, "malformed structure")
     out = {}
     for raw, sigma in (mappings or {}).items():
-        if not isinstance(raw, str):
+        if not isinstance(raw, str) or not isinstance(sigma, str):
             raise InputLoadError(comiset_mapping, what, "malformed structure")
         if raw.startswith("_source."):
             out[raw[len("_source.") :]] = sigma
@@ -141,16 +166,20 @@ def _load_benign_sample(path: str, field_map: dict[str, str]) -> list[dict]:
                     doc = json.loads(line)
                 except json.JSONDecodeError:
                     raise InputLoadError(path, what, "invalid JSON on a line") from None
+                except (RecursionError, ValueError) as e:  # nesting / int-conversion limits
+                    raise _limit_error(path, what, e) from None
                 src = doc.get("_source", {}) if isinstance(doc, dict) else None
-                if not isinstance(src, dict):
+                if not isinstance(src, dict) or not isinstance(src.get("sigmaforge_label", "benign"), str):
                     raise InputLoadError(path, what, "malformed line (not an object with an object _source)")
                 ev = _project_event(src, field_map)
                 ev["sigmaforge_label"] = src.get("sigmaforge_label", "benign")
                 events.append(ev)
-    except (OSError, ValueError) as e:  # missing/unreadable, or not valid UTF-8 text
-        if isinstance(e, InputLoadError):
-            raise
+    except InputLoadError:
+        raise
+    except (OSError, UnicodeDecodeError):  # missing/unreadable, or not valid UTF-8 text
         raise InputLoadError(path, what, "unreadable") from None
+    except MemoryError as e:
+        raise _limit_error(path, what, e) from None
     return events
 
 

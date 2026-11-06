@@ -197,3 +197,89 @@ def test_config_directory_instead_of_file_is_one_clean_line(tmp_path):
     d = tmp_path / HOSTILE / "cfgdir"
     d.mkdir(parents=True)
     _assert_clean(_backtest(tmp_path, ins, config=d), 2, "unreadable")
+
+
+# --- fix round 1: depth / range, mapping values, value types --------------------------------
+
+DEEP = 100_000
+BIGINT = "9" * 50_000
+
+
+def test_technique_map_deeply_nested_json_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["tm"].write_text("[" * DEEP)
+    _assert_clean(_backtest(tmp_path, ins), 4, "too deeply nested")
+
+
+def test_technique_map_huge_int_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["tm"].write_text('{"technique_event_counts": {}, "file_technique": {}, "total_pc": ' + BIGINT + "}")
+    _assert_clean(_backtest(tmp_path, ins), 4, "out of range")
+
+
+def test_benign_sample_deeply_nested_line_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["bs"].write_text("[" * DEEP + "\n")
+    _assert_clean(_backtest(tmp_path, ins), 4, "too deeply nested")
+
+
+def test_benign_sample_huge_int_line_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["bs"].write_text('{"_source": {"a": ' + BIGINT + "}}\n")
+    _assert_clean(_backtest(tmp_path, ins), 4, "out of range")
+
+
+@pytest.mark.parametrize("opener", ["[", "{a: "])
+def test_comiset_mapping_deeply_nested_yaml_is_one_clean_line(tmp_path, opener):
+    ins = _inputs(tmp_path)
+    ins["cm"].write_text(opener * DEEP)
+    _assert_clean(_backtest(tmp_path, ins), 4, "too deeply nested")
+
+
+def test_comiset_mapping_huge_int_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["cm"].write_text("mappings:\n  _source.a: " + BIGINT + "\n")
+    _assert_clean(_backtest(tmp_path, ins), 4, "out of range")
+
+
+@pytest.mark.parametrize("opener", ["[", "{a: "])
+def test_config_deeply_nested_yaml_is_one_clean_line(tmp_path, opener):
+    ins = _inputs(tmp_path)
+    _assert_clean(_backtest(tmp_path, ins, config=_cfg(tmp_path, (opener * DEEP).encode())), 2, "too deeply nested")
+
+
+def test_config_huge_int_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    cfg = _cfg(tmp_path, ("backtest:\n  floor: " + BIGINT + "\n").encode())
+    _assert_clean(_backtest(tmp_path, ins, config=cfg), 2, "out of range")
+
+
+@pytest.mark.parametrize("value", ["[1]", "{k: v}", "5", "null"])
+def test_comiset_mapping_non_string_value_is_one_clean_line(tmp_path, value):
+    ins = _inputs(tmp_path)
+    ins["cm"].write_text(f"mappings:\n  _source.a: {value}\n")
+    _assert_clean(_backtest(tmp_path, ins), 4, "malformed")
+
+
+@pytest.mark.parametrize(
+    "tm",
+    [
+        {"technique_event_counts": {"T1": SECRET}, "file_technique": {}, "total_pc": 0},
+        {"technique_event_counts": {"T1": True}, "file_technique": {}, "total_pc": 0},
+        {"technique_event_counts": {}, "file_technique": {"f": [SECRET]}, "total_pc": 0},
+        {"technique_event_counts": {}, "file_technique": {"f": 3}, "total_pc": 0},
+        {"technique_event_counts": {}, "file_technique": {}, "total_pc": True},
+        {"technique_event_counts": {}, "file_technique": {}, "total_pc": SECRET},
+    ],
+)
+def test_technique_map_value_types_are_checked(tmp_path, tm):
+    ins = _inputs(tmp_path)
+    ins["tm"].write_text(json.dumps(tm))
+    _assert_clean(_backtest(tmp_path, ins), 4, "malformed")
+
+
+@pytest.mark.parametrize("label", [[SECRET], {"k": SECRET}, 5, None])
+def test_benign_sample_non_string_label_is_one_clean_line(tmp_path, label):
+    ins = _inputs(tmp_path)
+    ins["bs"].write_text(json.dumps({"_source": {"sigmaforge_label": label}}) + "\n")
+    _assert_clean(_backtest(tmp_path, ins), 4, "malformed")

@@ -64,6 +64,12 @@ def _load_yaml(path: Path) -> dict:
         raise ConfigError(path, "undecodable text (not UTF-8)") from None
     except OSError:
         raise ConfigError(path, "unreadable") from None
+    except RecursionError:
+        raise ConfigError(path, "too deeply nested") from None
+    except MemoryError:
+        raise ConfigError(path, "too large") from None
+    except ValueError:  # e.g. the int-conversion digit limit
+        raise ConfigError(path, "value out of range") from None
     if not isinstance(data, dict):
         raise ConfigError(path, "config must be a YAML mapping")
     bt = data.get("backtest")
