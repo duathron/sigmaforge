@@ -32,4 +32,10 @@ build/
 
 # session needle artifacts (large/binary, not deliverables)
 reports/needle/
+reports/_*_summary.json
 *.db
+
+# setup_engine.sh leftovers (failed verification / previous engine moved aside)
+/Zircolite.old.*
+/Zircolite.setup.*
+/Zircolite.untrusted.*

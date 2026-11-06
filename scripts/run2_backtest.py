@@ -244,7 +244,8 @@ def main() -> int:
         "positive_control_fired": pc_fired,
         "run_hash": rh,
     }
-    Path("/tmp/_run2_summary.json").write_text(json.dumps(summary, indent=2))
+    (REPO / "reports").mkdir(exist_ok=True)
+    (REPO / "reports" / "_run2_summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     return 0
 

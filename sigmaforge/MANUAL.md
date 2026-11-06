@@ -39,6 +39,19 @@ sigmaforge backtest --rules my_rules/ --config sigmaforge.yaml --out reports/run
 `--rules` accepts a single `.yml` file OR a directory (auto-compiled to one engine
 ruleset).
 
+`setup_engine.sh` always clones the pinned engine fresh and verifies it against a pinned file manifest
+(`scripts/zircolite-manifest.sha256`: exact file set, sha256 and exec bit of every file, no symlinks, no
+hardlinks; the manifest itself is pinned by hash) plus the pinned commit and tree and the hash-locked
+requirements. An existing
+`Zircolite/` is moved into a private `Zircolite.old.XXXXXX/` directory, never trusted or deleted.
+sigmaforge does not re-verify the engine at run time; the check is setup-time only, and anyone who can
+write to the engine directory afterwards can still change it.
+Setup needs network access on every run. Leftovers (all git-ignored in the repository; remove them
+yourself when not needed): `Zircolite.setup.*` after a failed clone or verification,
+`Zircolite.old.XXXXXX/` whenever a previous `Zircolite/` existed, and `Zircolite.untrusted.XXXXXX/`
+when the moved-in engine fails the final check, in which case the previous engine is restored
+automatically. The installed `Zircolite/` directory gets mode 0755.
+
 ## Commands
 
 ### `sigmaforge hunt`
