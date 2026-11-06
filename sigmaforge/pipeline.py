@@ -102,7 +102,9 @@ COMISET_MAPPING_MAX_BYTES = 1024 * 1024
 BENIGN_SAMPLE_MAX_BYTES = 256 * 1024 * 1024
 BENIGN_SAMPLE_MAX_EVENTS = 500_000  # scripts/build_benign_sample.py scans at most 5M raw lines (EID-1 subset)
 RULE_FILE_MAX_BYTES = 1024 * 1024
-RULESET_HASH_MAX_BYTES = 64 * 1024 * 1024
+# The real compiled ruleset is ~1.1 MB and ~5,000 rules measure ~6 MB, so 16 MiB leaves ~2.7x headroom
+# for the whole SigmaHQ corpus while bounding what a hostile file of JSON scalars can make json.loads allocate.
+RULESET_HASH_MAX_BYTES = 16 * 1024 * 1024
 BENIGN_LINE_MAX_BYTES = 1024 * 1024  # real events are a few KB
 #: Rule loading budget (the SigmaHQ corpus is ~3,000 files, a few MB, well under 1M YAML nodes).
 MAX_RULE_FILES = 20_000
@@ -129,6 +131,17 @@ def _limit_error(path: object, what: str, e: BaseException) -> InputLoadError:
     return InputLoadError(path, what, "value out of range")
 
 
+def _is_text(x: object) -> bool:
+    """A str that can be written out: a lone surrogate (YAML "\\ud800", JSON "\\ud800") encodes to nothing."""
+    if not isinstance(x, str):
+        return False
+    try:
+        x.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _is_int(x: object) -> bool:
     """A count: an int (not a bool) that is not negative."""
     return isinstance(x, int) and not isinstance(x, bool) and x >= 0
@@ -140,9 +153,9 @@ def _tmap_ok(tmap: object) -> bool:
     counts, files, total = tmap.get("technique_event_counts"), tmap.get("file_technique"), tmap.get("total_pc")
     return (
         isinstance(counts, dict)
-        and all(isinstance(k, str) and _is_int(v) for k, v in counts.items())
+        and all(_is_text(k) and _is_int(v) for k, v in counts.items())
         and isinstance(files, dict)
-        and all(isinstance(k, str) and isinstance(v, str) for k, v in files.items())
+        and all(_is_text(k) and _is_text(v) for k, v in files.items())
         and _is_int(total)
     )
 
@@ -260,9 +273,9 @@ def _check_rule_fields(path: str, rule: dict) -> None:
         return
     title, tags, detection = rule.get("title"), rule.get("tags"), rule.get("detection", {})
     if (
-        not isinstance(title, str)
+        not _is_text(title)
         or not title
-        or not (tags is None or (isinstance(tags, list) and all(isinstance(t, str) for t in tags)))
+        or not (tags is None or (isinstance(tags, list) and all(_is_text(t) for t in tags)))
         or not isinstance(detection, dict)
     ):
         raise RuleLoadError(path, "malformed rule structure")

@@ -791,7 +791,7 @@ def test_compiled_ruleset_json_over_the_ruleset_cap_is_refused(tmp_path, monkeyp
 def test_ruleset_cap_value_is_pinned():
     from sigmaforge import pipeline
 
-    assert pipeline.RULESET_HASH_MAX_BYTES == 64 * 1024 * 1024
+    assert pipeline.RULESET_HASH_MAX_BYTES == 16 * 1024 * 1024
 
 
 def test_manifest_ruleset_hash_call_site_enforces_the_cap(tmp_path, monkeypatch):
@@ -1231,3 +1231,96 @@ def test_json_node_walk_stops_just_past_the_limit():
     from sigmaforge import pipeline
 
     assert pipeline._count_json_nodes(list(range(1000)), 3) == 4
+
+
+# --- follow-up: surrogate text, compiled ruleset cap, pre-scan thresholds -----------------------
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"title": "\ud800x", "level": "high"},
+        {"title": "t", "level": "high", "tags": ["attack.t1059", "\udfffz"]},
+    ],
+)
+def test_rule_text_with_a_lone_surrogate_is_refused_at_load(tmp_path, rule, form):
+    if form == "yaml":
+        f = tmp_path / "a.yml"
+        f.write_text(
+            "title: " + json.dumps(rule["title"]) + "\nlevel: high\ntags: " + json.dumps(rule.get("tags", [])) + "\n"
+        )
+    else:
+        f = tmp_path / "a.json"
+        f.write_text(json.dumps([rule]))
+    res = _rules_run(tmp_path, tmp_path / ("*" + f.suffix))
+    assert res.exit_code == 4 and "malformed rule structure" in res.output, res.output
+    assert "Traceback" not in res.output and len(res.output.strip().splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    "tm",
+    [
+        {"technique_event_counts": {"\ud800": 1}, "file_technique": {}, "total_pc": 0},
+        {"technique_event_counts": {}, "file_technique": {"\ud800": "T1"}, "total_pc": 0},
+        {"technique_event_counts": {}, "file_technique": {"f": "\ud800"}, "total_pc": 0},
+    ],
+)
+def test_technique_map_text_with_a_lone_surrogate_is_refused(tmp_path, tm):
+    ins = _inputs(tmp_path)
+    ins["tm"].write_text(json.dumps(tm))  # ensure_ascii writes the lone surrogate as a \ud800 escape
+    _assert_clean(_backtest(tmp_path, ins), 4, "malformed")
+
+
+def test_a_surrogate_in_the_report_text_does_not_crash_the_write(tmp_path, monkeypatch):
+    from sigmaforge import pipeline
+
+    res_obj = pipeline.BacktestResult(
+        rows=[], funnel={}, manifest={"k": "\ud800"}, report_md="# report \ud800 end\n", run_hash="h",
+        acceptance_gate=[], n_attack_events=0, technique_event_counts={}, rules_recall_measurable=0,
+        rules_precision_measurable=0, loaded_rule_count=0,
+    )  # fmt: skip
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", lambda cfg: res_obj)
+    ins = _inputs(tmp_path)
+    out = tmp_path / "report.md"
+    res = _backtest(tmp_path, ins, "--out", str(out))
+    assert res.exit_code == 0 and "Traceback" not in res.output, (res.output, repr(res.exception))
+    assert out.read_bytes() == b"# report \\ud800 end\n"
+    assert b"ud800" in out.with_suffix(".manifest.json").read_bytes()
+
+
+def test_compiled_ruleset_cap_is_sixteen_mib_and_enforced(tmp_path):
+    from sigmaforge import pipeline
+
+    cap = pipeline.RULESET_HASH_MAX_BYTES
+    ok = tmp_path / "ok.json"
+    ok.write_bytes(b"{}" + b" " * (cap - 2))
+    assert "too large" not in _rules_run(tmp_path, ok).output
+    big = tmp_path / "big.json"
+    big.write_bytes(b"{}" + b" " * (cap - 1))
+    res = _rules_run(tmp_path, big)
+    assert res.exit_code == 4 and "too large" in res.output
+
+
+def _prescan_run(tmp_path, monkeypatch, text, budget):
+    f = tmp_path / "c.json"
+    f.write_text(text)
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", budget)
+    calls = []
+    real = json.loads
+
+    def spy(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr("sigmaforge.pipeline.json.loads", spy)
+    res = _rules_run(tmp_path, f)
+    return res, calls
+
+
+@pytest.mark.parametrize("text", ["[{},{},{}]", "[[],[],[]]"])  # 4 containers: 1 outer + 3 inner
+def test_json_prescan_threshold_is_exact_for_both_bracket_kinds(tmp_path, monkeypatch, text):
+    res, calls = _prescan_run(tmp_path, monkeypatch, text, 4)
+    assert calls and "too many JSON nodes" not in res.output  # exactly at the budget: parsed
+    res, calls = _prescan_run(tmp_path, monkeypatch, text, 3)
+    assert not calls and res.exit_code == 4 and "too many JSON nodes" in res.output  # one over: not parsed

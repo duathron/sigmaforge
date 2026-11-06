@@ -204,7 +204,9 @@ def backtest(
 
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(res.report_md)
+    # backslashreplace: text that cannot be encoded (a lone surrogate) is written as an escape instead of
+    # crashing after the whole engine run, and the report stays complete (no new exit code, no lost run)
+    out_path.write_text(res.report_md, encoding="utf-8", errors="backslashreplace")
     manifest_path = out_path.with_suffix(".manifest.json")
     manifest_path.write_text(json.dumps(res.manifest, indent=2, sort_keys=True))
     console.print(f"report written: {_rich_safe(out_path)}", soft_wrap=True)
