@@ -91,6 +91,25 @@ def _sanitizing_handler(stream) -> logging.Handler:
     return handler
 
 
+def _translate(exc, err, out, caught, real_err) -> EngineCompileError | None:
+    """The sanitized replacement for an engine exception (None: let it propagate unchanged).
+    May raise on a hostile exception object; the caller turns that into a constant message."""
+    if isinstance(exc, KeyboardInterrupt | GeneratorExit):
+        return None
+    parts = [err.getvalue(), out.getvalue(), "\n".join(str(w.message) for w in caught)]
+    text = next((p.strip() for p in parts if p.strip()), "")
+    tail = "\n".join(text.splitlines()[-5:])[-600:]
+    if tail:
+        real_err.write(plain_safe(tail) + "\n")
+    if isinstance(exc, EngineNotFoundError):
+        return None
+    if isinstance(exc, SystemExit):
+        # any exit inside the compile means no ruleset: never let it pass as success
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else "text")
+        return EngineCompileError(f"engine exited during compile (code {code})")
+    return EngineCompileError(plain_safe(str(exc)))
+
+
 @contextlib.contextmanager
 def _captured_engine_output() -> Iterator[None]:
     """Capture the Python-level output channels of the in-process engine work (stdout, stderr, warnings) and
@@ -117,24 +136,13 @@ def _captured_engine_output() -> Iterator[None]:
                 root.handlers = [_sanitizing_handler(real_err)]
                 yield
     except BaseException as exc:
-        if isinstance(exc, KeyboardInterrupt | GeneratorExit):
-            raise
-        parts = [err.getvalue(), out.getvalue(), "\n".join(str(w.message) for w in caught)]
-        text = next((p.strip() for p in parts if p.strip()), "")
-        tail = "\n".join(text.splitlines()[-5:])[-600:]
-        if tail:
-            real_err.write(plain_safe(tail) + "\n")
-        if isinstance(exc, EngineNotFoundError):
-            raise
-        if isinstance(exc, SystemExit):
-            # any exit inside the compile means no ruleset: never let it pass as success
-            code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else "text")
-            raise EngineCompileError(f"engine exited during compile (code {code})") from None
         try:
-            msg = plain_safe(str(exc))
-        except Exception:  # a hostile __str__ must not escape the sanitizer
-            msg = plain_safe(type(exc).__name__)
-        raise EngineCompileError(msg) from None
+            translated = _translate(exc, err, out, caught, real_err)
+        except BaseException:  # the translation is total: a hostile exception cannot escape it
+            translated = EngineCompileError("engine failed during compile")
+        if translated is None:
+            raise
+        raise translated from None
     finally:
         root.handlers = saved_root_handlers
         logging.lastResort = saved_last_resort

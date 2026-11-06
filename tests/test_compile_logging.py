@@ -287,17 +287,85 @@ def test_engine_base_exception_subclass_is_wrapped_and_clean(tmp_path, monkeypat
     _assert_no_raw(str(ei.value))
 
 
-def test_engine_exception_with_raising_str_is_wrapped_and_clean(tmp_path, monkeypatch, clean_modules):
+@pytest.mark.parametrize("exc", ["ValueError", "ZeroDivisionError", "TypeError"])
+def test_engine_exception_with_raising_str_is_wrapped_and_clean(tmp_path, monkeypatch, clean_modules, exc):
     body = (
         "class E(Exception):\n"
         "            def __str__(self):\n"
-        f"                raise ValueError({HOSTILE_EXC!r})\n"
+        f"                raise {exc}({HOSTILE_EXC!r})\n"
         "        raise E()"
     )
     with pytest.raises(EngineCompileError) as ei:
         _compile(tmp_path, monkeypatch, body)
     _assert_no_raw(str(ei.value))
-    assert str(ei.value) == "E"
+    assert str(ei.value) == "engine failed during compile"
+    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+
+
+def test_engine_exception_with_non_str_str_is_wrapped_and_clean(tmp_path, monkeypatch, clean_modules):
+    body = "class E(Exception):\n            def __str__(self):\n                return 5\n        raise E()"
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, body)
+    assert str(ei.value) == "engine failed during compile"
+
+
+@pytest.mark.parametrize("raised", ["ValueError", "SystemExit"])
+def test_system_exit_with_raising_code_is_wrapped_and_clean(tmp_path, monkeypatch, clean_modules, raised):
+    body = (
+        "class S(SystemExit):\n"
+        "            @property\n"
+        "            def code(self):\n"
+        f"                raise {raised}({HOSTILE_EXC!r})\n"
+        "        raise S()"
+    )
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, body)
+    assert str(ei.value) == "engine failed during compile"
+    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+
+
+def test_system_exit_error_has_no_cause_or_context(tmp_path, monkeypatch, clean_modules):
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, "sys.exit(2)")
+    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+
+
+META_BODY = (
+    "class M(Exception):\n"
+    f"            def _boom(self, *a): raise ValueError({HOSTILE_EXC!r})\n"
+    "            __str__ = __repr__ = _boom\n"
+    "            code = property(_boom)\n"
+    "            args = property(_boom)\n"
+    "        raise M()"
+)
+
+
+def test_fully_hostile_exception_object_still_gives_one_clean_error(tmp_path, monkeypatch, clean_modules):
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, META_BODY)
+    assert str(ei.value) == "engine failed during compile"
+    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+
+
+def test_hunt_exits_1_for_a_fully_hostile_exception(tmp_path, monkeypatch, clean_modules):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    _channel_engine(tmp_path / "eng", META_BODY)
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yml").write_text("title: a\n")
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    res = CliRunner().invoke(
+        app, ["hunt", "--rules", str(rules), "--logs", str(logs), "--engine-home", str(tmp_path / "eng")]
+    )
+    assert res.exit_code == 1, res.output
+    assert "engine failed during compile" in res.output and "Traceback" not in res.output
+    _assert_no_raw(res.output)
 
 
 def test_hunt_exits_1_when_the_engine_calls_sys_exit_0(tmp_path, monkeypatch, clean_modules):
