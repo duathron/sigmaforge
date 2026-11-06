@@ -1708,3 +1708,36 @@ def test_write_output_loops_over_short_writes(tmp_path, monkeypatch):
     f = tmp_path / "short.txt"
     _write_output(f, "0123456789abcdef")
     assert f.read_bytes() == b"0123456789abcdef"
+
+
+def test_write_output_writes_a_large_varied_payload_exactly(tmp_path):
+    from sigmaforge.main import _write_output
+
+    text = "".join(f"line {i} é€漢字 {i * 7919 % 10007}\n" for i in range(12_000))
+    assert len(text.encode("utf-8")) > 200_000
+    f = tmp_path / "big.txt"
+    f.write_text("old " * 100_000)  # a longer old file must be fully replaced
+    _write_output(f, text)
+    assert f.read_bytes() == text.encode("utf-8")
+    g = tmp_path / "big-new.txt"
+    _write_output(g, text)
+    assert g.read_bytes() == text.encode("utf-8")
+
+
+def test_the_cli_report_and_manifest_are_written_in_full(tmp_path, monkeypatch):
+    from sigmaforge import pipeline
+
+    report = "".join(f"| rule {i} | é€漢字 | {i}\n" for i in range(15_000))
+    manifest = {f"k{i}": "v" * 20 for i in range(5_000)}
+    assert len(report.encode("utf-8")) > 200_000
+    res_obj = pipeline.BacktestResult(
+        rows=[], funnel={}, manifest=manifest, report_md=report, run_hash="h", acceptance_gate=[],
+        n_attack_events=0, technique_event_counts={}, rules_recall_measurable=0,
+        rules_precision_measurable=0, loaded_rule_count=0,
+    )  # fmt: skip
+    monkeypatch.setattr("sigmaforge.pipeline.run_backtest_pipeline", lambda cfg: res_obj)
+    out = tmp_path / "full.md"
+    res = _bt_out(tmp_path, out)
+    assert res.exit_code == 0, res.output
+    assert out.read_bytes() == report.encode("utf-8")
+    assert json.loads(out.with_suffix(".manifest.json").read_text()) == manifest
