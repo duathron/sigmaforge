@@ -101,6 +101,8 @@ def _run(
     existing=None,
     pre=None,
     bin_hook=None,
+    timeout=120,
+    umask=None,
 ):
     """Run the script in tmp/work. `existing(dir)` populates a pre-existing Zircolite/."""
     bindir, scripts, work = _setup(tmp_path, lock_sha)
@@ -124,7 +126,10 @@ def _run(
         "SHIM_REAL_GIT": shutil.which("git"),
         **(extra_env or {}),
     }
-    res = subprocess.run(["bash", str(scripts / "setup_engine.sh")], cwd=work, env=env, capture_output=True, text=True)
+    cmd = ["bash", str(scripts / "setup_engine.sh")]
+    if umask:
+        cmd = ["bash", "-c", f'umask {umask}; exec bash "$0"', str(scripts / "setup_engine.sh")]
+    res = subprocess.run(cmd, cwd=work, env=env, capture_output=True, text=True, timeout=timeout)
     return res, log.read_text(), work
 
 
@@ -696,3 +701,190 @@ def test_committed_manifest_matches_a_genuine_checkout_of_the_pin(tmp_path):
         check=True,
     ).stdout
     assert out == (ROOT / "scripts" / "zircolite-manifest.sha256").read_text()
+
+
+# --- follow-up: loose modes, planted modules, special files, manifest read once ------------------
+
+
+def _helper_source():
+    text = SCRIPT.read_text()
+    m = re.search(r"python3 -I - \"\$1\" <<'PY'\n(.*?)\nPY\n", text, re.S)
+    assert m, "check_content helper not found"
+    return m.group(1)
+
+
+def _manifest_text(files):
+    return "".join(f"{m} {hashlib.sha256(c).hexdigest()} {p}\n" for p, m, c in files)
+
+
+def _make_tree(root, files=FIXTURE_FILES):
+    (root / ".git").mkdir(parents=True)
+    root.chmod(0o755)
+    for rel, mode, content in files:
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.parent.chmod(0o755)
+        f.write_bytes(content)
+        f.chmod(0o755 if mode == "100755" else 0o644)
+    return root
+
+
+def _run_helper(tree, files=FIXTURE_FILES, patch=None):
+    """Execute the shipped check_content helper in-process; return (exit code, message)."""
+    import contextlib
+    import io
+    import sys
+
+    out = io.StringIO()
+    old_env, old_argv = os.environ.get("ZM"), sys.argv
+    os.environ["ZM"] = _manifest_text(files)
+    sys.argv = ["helper", str(tree)]
+    code = 0
+    try:
+        with contextlib.redirect_stdout(out):
+            try:
+                if patch:
+                    patch()
+                exec(compile(_helper_source(), "check_content", "exec"), {"__name__": "__main__"})
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+    finally:
+        sys.argv = old_argv
+        if old_env is None:
+            os.environ.pop("ZM", None)
+        else:
+            os.environ["ZM"] = old_env
+    return code, out.getvalue()
+
+
+def test_helper_accepts_a_clean_tree(tmp_path):
+    assert _run_helper(_make_tree(tmp_path / "t")) == (0, "")
+
+
+@pytest.mark.parametrize("mode", [0o666, 0o664, 0o646, 0o4644, 0o2644, 0o1644])
+def test_helper_rejects_loose_or_special_file_modes(tmp_path, mode):
+    t = _make_tree(tmp_path / "t")
+    (t / "zircolite.py").chmod(mode)
+    code, msg = _run_helper(t)
+    assert code == 1 and "zircolite.py" in msg and ("writable" in msg or "setuid" in msg), msg
+
+
+@pytest.mark.parametrize("mode", [0o777, 0o775, 0o757, 0o2755, 0o1755])
+def test_helper_rejects_loose_or_special_directory_modes(tmp_path, mode):
+    t = _make_tree(tmp_path / "t")
+    (t / "lib").chmod(mode)
+    code, msg = _run_helper(t)
+    assert code == 1 and "lib" in msg, msg
+
+
+def test_helper_rejects_a_loose_clone_root(tmp_path):
+    t = _make_tree(tmp_path / "t")
+    t.chmod(0o777)
+    code, msg = _run_helper(t)
+    assert code == 1 and "clone directory" in msg
+
+
+def test_a_fifo_at_a_manifest_path_is_refused_without_hanging(tmp_path):
+    t = _make_tree(tmp_path / "t")
+    os.rename(t / "zircolite.py", tmp_path / "moved.py")
+    os.mkfifo(t / "zircolite.py", 0o644)
+    import signal
+
+    def on_alarm(*_):
+        raise AssertionError("opening the FIFO blocked")
+
+    old = signal.signal(signal.SIGALRM, on_alarm)
+    signal.alarm(10)
+    try:
+        code, msg = _run_helper(t)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    assert code == 1 and "zircolite.py" in msg
+
+
+def test_symlink_swapped_in_after_the_walk_is_refused_by_nofollow(tmp_path):
+    t = _make_tree(tmp_path / "t")
+    same = tmp_path / "same.py"
+    same.write_bytes(b"")
+    same.chmod(0o644)
+
+    def swap_after_walk():
+        real_walk = os.walk
+
+        def walk(*a, **k):
+            yield from real_walk(*a, **k)
+            os.rename(t / "zircolite.py", tmp_path / "orig.py")
+            os.symlink(same, t / "zircolite.py")  # identical content, regular target
+
+        os.walk = walk
+
+    real = os.walk
+    try:
+        code, msg = _run_helper(t, patch=swap_after_walk)
+    finally:
+        os.walk = real
+    assert code == 1 and "cannot open" in msg, msg
+
+
+def test_a_planted_hashlib_in_the_cwd_is_never_imported(tmp_path):
+    marker = tmp_path / "HASHLIB_MARKER"
+
+    def plant(work):
+        for name in ("hashlib.py", "stat.py", "os.py", "sys.py"):
+            (work / name).write_text(f"open({str(marker)!r}, 'w').write('x')\n")
+
+    res, log, work = _run(tmp_path, pre=plant)
+    assert res.returncode == 0, res.stderr + res.stdout
+    assert not marker.exists()
+
+
+def test_every_python_invocation_in_the_script_uses_isolated_mode():
+    calls = re.findall(r"python3 [^\n]*", SCRIPT.read_text())
+    assert calls and all(c.startswith("python3 -I") for c in calls), calls
+
+
+def test_manifest_is_read_once_so_pin_and_parse_cannot_disagree(tmp_path):
+    # a `cat` shim hands out the genuine manifest, then rewrites the file on disk: a script that re-read
+    # the file for the content check would now see an extra entry and refuse
+    def cat_shim(bindir):
+        manifest = bindir.parent / "scripts" / "zircolite-manifest.sha256"
+        (bindir / "cat").write_text(
+            '#!/bin/bash\n/bin/cat "$@"\n'
+            f'case "$*" in *zircolite-manifest.sha256*) echo "100644 {"0" * 64} evil.py" >> {manifest} ;; esac\n'
+        )
+        (bindir / "cat").chmod(0o755)
+
+    res, log, work = _run(tmp_path, bin_hook=cat_shim)
+    assert res.returncode == 0, res.stderr
+    assert sum(ln.startswith("uv ") and "install" in ln for ln in log.splitlines()) == 1
+
+
+def test_setup_works_under_a_group_writable_umask(tmp_path):
+    res, log, work = _run(tmp_path, umask="002")
+    assert res.returncode == 0, res.stderr
+
+
+def test_provenance_sha_is_documented_as_unverified():
+    text = (ROOT / "sigmaforge" / "MANUAL.md").read_text()
+    assert "not verified" in text and "zircolite_commit_sha" in text
+
+
+def test_file_made_writable_after_the_walk_is_refused_by_the_fd_check(tmp_path):
+    t = _make_tree(tmp_path / "t")
+
+    def loosen_after_walk():
+        real_walk = os.walk
+
+        def walk(*a, **k):
+            yield from real_walk(*a, **k)
+            (t / "zircolite.py").chmod(0o666)
+
+        os.walk = walk
+
+    real = os.walk
+    try:
+        code, msg = _run_helper(t, patch=loosen_after_walk)
+    finally:
+        os.walk = real
+    assert code == 1 and "zircolite.py" in msg and "writable" in msg, msg
