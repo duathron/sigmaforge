@@ -105,11 +105,26 @@ separately licensed). To go from a fresh clone to a runnable backtest:
 
 ```bash
 uv sync --group backtest          # script deps (pyyaml, evtx, gdown)
-bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 + its runtime deps
+bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 (pinned commit, verified) + hash-checked runtime deps
 ```
 
 Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact
 `uv sync` uninstalls the engine's dependencies again (re-run the script if you do).
+
+The script clones the pinned engine fresh on every run and verifies it against a pinned file manifest
+(`scripts/zircolite-manifest.sha256`: mode and sha256 of every tracked file, itself pinned by hash in
+the script): exact file set, content and exec bits, no symlinks, no hardlinked files, plus the commit
+and tree as a sanity check and the hash-locked requirements. An
+existing `Zircolite/` is never trusted or deleted: it is moved into a private
+`Zircolite.old.XXXXXX/` directory. sigmaforge does not re-verify the engine at run time: the check
+happens at setup only, and anyone who can write to the engine directory afterwards can still change
+it.
+
+Setup needs network access on every run. Leftovers (all git-ignored; remove them yourself when not
+needed): `Zircolite.setup.*` after a failed clone or verification, `Zircolite.old.XXXXXX/` whenever a previous
+`Zircolite/` existed, and `Zircolite.untrusted.XXXXXX/` if the moved-in engine fails the
+final check (the previous engine is then restored automatically). The installed `Zircolite/`
+directory gets mode 0755 (`mktemp` would create 0700).
 
 Then obtain the corpora (see the table above) into `~/sigmaforge-v0/` and build the
 combined samples with the `scripts/build_*_benign.py` / `scripts/build_*_corpus.py`

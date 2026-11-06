@@ -15,6 +15,7 @@ Precision: Zircolite on the streamed COMISET benign EID-1 sample, with the
 
 from __future__ import annotations
 
+import argparse
 import glob
 import json
 import os
@@ -78,6 +79,9 @@ def load_loaded_rules() -> list[dict]:
 def main() -> int:
     # The engine is never taken from the current directory; these scripts run from this checkout.
     os.environ.setdefault("SIGMAFORGE_HOME", str(REPO))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n-attack-events", type=int, default=0, help="Attack-corpus event count to record (default 0).")
+    args = ap.parse_args()
     loaded = load_loaded_rules()
     print(f"[loaded] {len(loaded)} high+critical stateless process_creation rules", flush=True)
 
@@ -90,9 +94,7 @@ def main() -> int:
         json_input=False,
         corpus_label="malicious",
     )
-    n_attack_events = (
-        int(Path("/tmp/_n_attack_events").read_text().strip()) if Path("/tmp/_n_attack_events").exists() else 0
-    )
+    n_attack_events = args.n_attack_events
     print(f"[recall] attack_fires={len(attack_fires)} n_attack_events={n_attack_events}", flush=True)
 
     # --- Precision pass (COMISET benign sample) ---
@@ -159,7 +161,8 @@ def main() -> int:
         "benign_fires": len(benign_fires),
         "positive_control_fired": pc_fired,
     }
-    Path("/tmp/_backtest_summary.json").write_text(json.dumps(summary, indent=2))
+    (REPO / "reports").mkdir(exist_ok=True)
+    (REPO / "reports" / "_backtest_summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     return 0
 
