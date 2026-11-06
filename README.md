@@ -105,7 +105,7 @@ separately licensed). To go from a fresh clone to a runnable backtest:
 
 ```bash
 uv sync --group backtest          # script deps (pyyaml, evtx, gdown)
-bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 + its runtime deps
+bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 (pinned commit, verified) + hash-checked runtime deps
 ```
 
 Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact

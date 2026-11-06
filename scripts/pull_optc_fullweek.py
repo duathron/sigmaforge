@@ -18,6 +18,9 @@ The combined corpus (data/comiset/combined_optc_benign_sample.jsonl) already hol
 run5 baseline (17,124: COMISET + Nextron) + run6 OpTC (30,383). We APPEND onto it; the
 baseline + run6 events are carried through unchanged (identity-dedup guarantees no
 double-count).
+
+TARGETS: the host-group/day file list is read from --targets (default data/optc_targets.json), not
+from a fixed temp-directory path.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ import gdown
 
 REPO = Path(__file__).resolve().parent.parent
 COMBINED = REPO / "data" / "comiset" / "combined_optc_benign_sample.jsonl"
-TARGETS_JSON = Path("/tmp/optc_targets.json")
+DEFAULT_TARGETS_JSON = REPO / "data" / "optc_targets.json"
 OPTC_DIR = Path.home() / "sigmaforge-v0" / "optc"
 PROGRESS = REPO / "reports" / "run7_pull_progress.json"
 
@@ -139,12 +142,18 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-optc-total", type=int, default=500_000)
     ap.add_argument("--max-raw-gb", type=float, default=60.0)
+    ap.add_argument(
+        "--targets",
+        type=Path,
+        default=DEFAULT_TARGETS_JSON,
+        help="JSON list of host-group/day files to pull (default: data/optc_targets.json).",
+    )
     args = ap.parse_args()
 
     if not COMBINED.exists():
         print(f"[FATAL] {COMBINED} missing — run6 corpus required as the append base.", flush=True)
         return 2
-    targets = json.loads(TARGETS_JSON.read_text())
+    targets = json.loads(args.targets.read_text())
     print(f"[targets] {len(targets)} host-group/day ecar-last.json.gz files queued", flush=True)
 
     existing = load_existing_eids()
