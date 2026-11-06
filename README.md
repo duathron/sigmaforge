@@ -111,9 +111,10 @@ bash scripts/setup_engine.sh      # fetch Zircolite 3.7.6 (pinned commit, verifi
 Run `setup_engine.sh` **after** `uv sync` and do not re-sync afterwards: an exact
 `uv sync` uninstalls the engine's dependencies again (re-run the script if you do).
 
-The script clones the pinned engine fresh on every run and verifies it by content: the commit and
-tree, every tracked file against its blob id in the pinned tree (never consulting the git index,
-attributes, filters or hooks), no extra files or directories, and the hash-locked requirements. An
+The script clones the pinned engine fresh on every run and verifies it against a pinned file manifest
+(`scripts/zircolite-manifest.sha256`: mode and sha256 of every tracked file, itself pinned by hash in
+the script): exact file set, content and exec bits, no symlinks, no hardlinked files, plus the commit
+and tree as a sanity check and the hash-locked requirements. An
 existing `Zircolite/` is never trusted or deleted: it is moved into a private
 `Zircolite.old.XXXXXX/` directory. sigmaforge does not re-verify the engine at run time: the check
 happens at setup only, and anyone who can write to the engine directory afterwards can still change

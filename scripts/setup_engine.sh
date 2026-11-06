@@ -7,13 +7,15 @@
 #
 # Supply chain: an existing Zircolite/ directory is NEVER trusted (its working tree, .git and
 # config can all be planted). Every run clones the engine fresh into a new directory next to the
-# target and verifies it BY CONTENT: the commit and tree sha against the pins, every tracked file
-# against its blob id in the pinned tree (`git ls-tree` + `git hash-object --no-filters`, which
-# never consult the index, attributes, filters or hooks), the working tree to contain exactly the
-# tracked paths (plus .git/), and the sha256 of requirements.txt against the lock. Only then is
-# the old directory moved aside and the new one moved into place, and the result is verified
-# again. Nothing is ever deleted: the old engine goes into a private mktemp container
-# (Zircolite.old.XXXXXX/Zircolite), a rejected engine into Zircolite.untrusted.XXXXXX/Zircolite.
+# target and verifies it against a PINNED FILE MANIFEST committed next to the lock
+# (scripts/zircolite-manifest.sha256: mode + sha256 of every tracked file of the pinned tag; the
+# manifest's own sha256 is pinned in this script). The working tree must contain exactly those
+# paths (plus .git/), with the listed content and exec bit, no symlinks anywhere, and no hardlinked
+# files; the clone's git object database is NOT trusted for this. The commit/tree sha are checked
+# as an extra sanity check, and requirements.txt against the lock. Only then is the old directory
+# moved aside and the new one moved into place, and the result is verified again. Nothing is ever
+# deleted: the old engine goes into a private mktemp container (Zircolite.old.XXXXXX/Zircolite), a
+# rejected engine into Zircolite.untrusted.XXXXXX/Zircolite.
 # Dependencies are installed from scripts/zircolite-requirements.lock with `--require-hashes`.
 # Leftovers (all git-ignored): Zircolite.setup.* after a failed clone/verification, Zircolite.old.*
 # whenever a previous Zircolite/ existed, Zircolite.untrusted.* if the moved-in engine failed the
@@ -26,38 +28,29 @@ ZIRCOLITE_VERSION="v3.7.6"
 ZIRCOLITE_COMMIT="b37b51eb00c49fc7bfd2f4968f1e5c3fc30da643"
 ZIRCOLITE_TREE="e8be4ec9d77b6850730e08d610cfb2b0b2ced2cb"
 ZIRCOLITE_REPO="https://github.com/wagga40/Zircolite.git"
+ZIRCOLITE_MANIFEST_SHA256="e6d7e30bdfd42c2c93cdcc2458a3cab592b83201544e66d71817ad79928975f6"
 DEST="Zircolite"
 LOCK="$(cd "$(dirname "$0")" && pwd)/zircolite-requirements.lock"
+MANIFEST="$(cd "$(dirname "$0")" && pwd)/zircolite-manifest.sha256"
 
-# git with the ambient repository/config environment removed, no fsmonitor and no hooks.
+# git with the ambient repository/config environment removed, no fsmonitor, no hooks, no replace refs.
 safe_git() {
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
         -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_CONFIG -u GIT_CONFIG_GLOBAL \
         -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
-        git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
+        GIT_NO_REPLACE_OBJECTS=1 git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
 }
 
-# check_content DIR: every tracked file matches its blob id and mode in the pinned tree, and the
-# directory holds exactly those paths (and their parent directories) plus .git. Reads only the
-# object database and the files themselves: never the index, attributes, filters or hooks.
+# check_content DIR: the working tree matches the pinned manifest exactly. Reads only the files
+# themselves and the manifest: never git (object database, index, attributes, filters, hooks).
 check_content() {
-    python3 - "$1" <<'PY'
+    python3 - "$1" "$MANIFEST" <<'PY'
+import hashlib
 import os
-import subprocess
+import stat
 import sys
 
-d = sys.argv[1]
-env = {
-    k: v
-    for k, v in os.environ.items()
-    if k not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                 "GIT_ALTERNATE_OBJECT_DIRECTORIES"} and not k.startswith("GIT_CONFIG")
-}
-
-
-def git(*args, data=None):
-    cmd = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", d, *args]
-    return subprocess.run(cmd, env=env, capture_output=True, check=True, input=data).stdout
+d, manifest = sys.argv[1], sys.argv[2]
 
 
 def fail(msg):
@@ -65,52 +58,51 @@ def fail(msg):
     sys.exit(1)
 
 
-if os.path.islink(os.path.join(d, ".git")) or not os.path.isdir(os.path.join(d, ".git")):
+expected = {}
+dirs = set()
+with open(manifest, encoding="utf-8") as fh:
+    for line in fh:
+        if line.startswith("#") or not line.strip():
+            continue
+        mode, digest, rel = line.rstrip("\n").split(" ", 2)
+        expected[rel] = (mode, digest)
+        parts = rel.split("/")
+        for n in range(1, len(parts)):
+            dirs.add("/".join(parts[:n]))
+if not expected:
+    fail("the manifest is empty")
+git_dir = os.path.join(d, ".git")
+if os.path.islink(git_dir) or not os.path.isdir(git_dir):
     fail(".git is not a real directory")
-expected = set()
-try:
-    listing = git("ls-tree", "-r", "-z", "HEAD")
-except subprocess.CalledProcessError:
-    fail("git ls-tree failed")
-for rec in listing.split(b"\0"):
-    if not rec:
-        continue
-    meta, path = rec.split(b"\t", 1)
-    mode, typ, sha = meta.split(b" ")
-    rel = os.fsdecode(path)
+for rel, (mode, digest) in expected.items():
     full = os.path.join(d, rel)
-    if typ != b"blob" or mode not in (b"100644", b"100755", b"120000"):
-        fail("unexpected tree entry " + repr(rel))
     try:
-        if mode == b"120000":
-            if not os.path.islink(full):
-                fail("tracked symlink missing: " + repr(rel))
-            got = git("hash-object", "--no-filters", "--stdin", data=os.fsencode(os.readlink(full)))
-        else:
-            if os.path.islink(full) or not os.path.isfile(full):
-                fail("tracked file missing or replaced: " + repr(rel))
-            if bool(os.stat(full).st_mode & 0o100) != (mode == b"100755"):
-                fail("mode differs for " + repr(rel))
-            got = git("hash-object", "--no-filters", "--", rel)
-    except subprocess.CalledProcessError:
-        fail("git hash-object failed for " + repr(rel))
-    if got.strip() != sha:
-        fail("content differs for " + repr(rel))
-    parts = rel.split("/")
-    for n in range(1, len(parts) + 1):
-        expected.add("/".join(parts[:n]))
+        st = os.lstat(full)
+    except OSError:
+        fail("missing file " + repr(rel))
+    if not stat.S_ISREG(st.st_mode):
+        fail("not a regular file (symlink or other): " + repr(rel))
+    if st.st_nlink != 1:
+        fail("hardlinked file: " + repr(rel))
+    if bool(st.st_mode & 0o100) != (mode == "100755"):
+        fail("mode differs for " + repr(rel))
+    with open(full, "rb") as fh:
+        if hashlib.sha256(fh.read()).hexdigest() != digest:
+            fail("content differs for " + repr(rel))
 actual = set()
-for root, dirs, files in os.walk(d, followlinks=False):
+for root, dnames, fnames in os.walk(d, followlinks=False):
     rel_root = os.path.relpath(root, d)
     if rel_root == ".":
-        dirs[:] = [x for x in dirs if x != ".git"]
-        files = [x for x in files if x != ".git"]
-    for name in dirs + files:
-        actual.add(name if rel_root == "." else rel_root + "/" + name)
-if actual != expected:
-    extra = sorted(actual - expected)[:3]
-    missing = sorted(expected - actual)[:3]
-    fail("working tree differs from the pinned tree (extra: %r, missing: %r)" % (extra, missing))
+        dnames[:] = [x for x in dnames if x != ".git"]
+        fnames = [x for x in fnames if x != ".git"]
+    for name in dnames + fnames:
+        rel = name if rel_root == "." else rel_root + "/" + name
+        actual.add(rel)
+        if os.path.islink(os.path.join(root, name)):
+            fail("symbolic link in the tree: " + repr(rel))
+want = set(expected) | dirs
+if actual != want:
+    fail("working tree differs from the manifest (extra: %r, missing: %r)" % (sorted(actual - want)[:3], sorted(want - actual)[:3]))
 PY
 }
 
@@ -124,12 +116,6 @@ verify_dir() {
         VERIFY_ERR="$d is a symbolic link, not the verified clone"
         return 1
     fi
-    h="$(safe_git -C "$d" rev-parse HEAD)"
-    t="$(safe_git -C "$d" rev-parse 'HEAD^{tree}')"
-    if [ "$h" != "$ZIRCOLITE_COMMIT" ] || [ "$t" != "$ZIRCOLITE_TREE" ]; then
-        VERIFY_ERR="$d is at commit $h / tree $t, expected $ZIRCOLITE_COMMIT / $ZIRCOLITE_TREE"
-        return 1
-    fi
     if ! what="$(check_content "$d" 2>&1)"; then
         VERIFY_ERR="the content of $d is not the pinned tree: $what"
         return 1
@@ -138,6 +124,13 @@ verify_dir() {
     have="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$d/requirements.txt")"
     if [ -z "$want" ] || [ "$want" != "$have" ]; then
         VERIFY_ERR="$d/requirements.txt (sha256 $have) does not match the lock ($want); regenerate scripts/zircolite-requirements.lock (command in its header)"
+        return 1
+    fi
+    # Extra sanity check (the clone's object database is not trusted for the content above).
+    h="$(safe_git -C "$d" rev-parse HEAD)"
+    t="$(safe_git -C "$d" rev-parse 'HEAD^{tree}')"
+    if [ "$h" != "$ZIRCOLITE_COMMIT" ] || [ "$t" != "$ZIRCOLITE_TREE" ]; then
+        VERIFY_ERR="$d is at commit $h / tree $t, expected $ZIRCOLITE_COMMIT / $ZIRCOLITE_TREE"
         return 1
     fi
     return 0
@@ -157,6 +150,12 @@ refuse_if_link() {
         exit 1
     fi
 }
+
+manifest_have="$(python3 -c 'import hashlib,sys;print(hashlib.sha256("".join(l for l in open(sys.argv[1], encoding="utf-8") if not l.startswith("#")).encode()).hexdigest())' "$MANIFEST")"
+if [ "$manifest_have" != "$ZIRCOLITE_MANIFEST_SHA256" ]; then
+    echo "[setup] ERROR: $MANIFEST (body sha256 $manifest_have) does not match the pinned $ZIRCOLITE_MANIFEST_SHA256; nothing was cloned or installed." >&2
+    exit 1
+fi
 
 NEW="$(mktemp -d "${DEST}.setup.XXXXXX")"
 echo "[setup] cloning Zircolite $ZIRCOLITE_VERSION into $NEW ..."

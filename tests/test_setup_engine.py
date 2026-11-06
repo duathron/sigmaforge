@@ -7,15 +7,23 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "setup_engine.sh"
 LOCK = ROOT / "scripts" / "zircolite-requirements.lock"
 GOOD_SHA = "b37b51eb00c49fc7bfd2f4968f1e5c3fc30da643"
 GOOD_TREE = "e8be4ec9d77b6850730e08d610cfb2b0b2ced2cb"
 REQ = b"orjson>=3.9.15\n"
+# what the git shim's clone contains (sorted): path, mode, content
+FIXTURE_FILES = [
+    ("lib/sub/data.txt", "100644", b"data\n"),
+    ("requirements.txt", "100644", REQ),
+    ("zircolite.py", "100644", b""),
+]
 
 GIT_SHIM = """#!/bin/bash
-echo "git[GIT_DIR=${GIT_DIR-unset} WT=${GIT_WORK_TREE-unset}] $*" >> "$SHIM_LOG"
+echo "git[GIT_DIR=${GIT_DIR-unset} WT=${GIT_WORK_TREE-unset} NR=${GIT_NO_REPLACE_OBJECTS-unset}] $*" >> "$SHIM_LOG"
 cdir=""
 prev=""
 for a in "$@"; do [ "$prev" = "-C" ] && cdir="$a"; prev="$a"; done
@@ -25,27 +33,13 @@ for a in "$@"; do
   if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$a" in -C|-c) skip=1 ;; -*) ;; *) sub="$a"; break ;; esac
 done
-if [ "$sub" = "ls-tree" ]; then exec "$SHIM_REAL_GIT" "$@"; fi
-if [ "$sub" = "hash-object" ]; then
-  out="$("$SHIM_REAL_GIT" "$@")"; rc=$?
-  echo "$out"
-  # the last tracked file hashed: swap the whole clone for a symlink right after the content check
-  if [ -n "${SHIM_SWAP_TO:-}" ] && [ "${@: -1}" = "zircolite.py" ] && [ "$cdir" != "Zircolite" ]; then
-    /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
-  fi
-  exit $rc
-fi
-if [ "$sub" = "status" ]; then
-  out="$("$SHIM_REAL_GIT" "$@")"; rc=$?
-  [ -n "$out" ] && echo "$out"
-  if [ -n "${SHIM_SWAP_TO:-}" ] && [ "$cdir" != "Zircolite" ]; then
-    /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
-  fi
-  exit $rc
-fi
 case "$*" in
   *'HEAD^{tree}'*)
     echo "$SHIM_TREE"
+    # the last check of a verification: swap the whole clone for a symlink right after it
+    if [ -n "${SHIM_SWAP_TO:-}" ] && [ "$cdir" != "Zircolite" ]; then
+      /bin/mv "$cdir" "$cdir.real" && ln -s "$SHIM_SWAP_TO" "$cdir"
+    fi
     exit 0 ;;
   *rev-parse*)
     if [ "$cdir" = "Zircolite" ] && [ -n "${SHIM_HEAD_AFTER:-}" ]; then
@@ -81,7 +75,13 @@ def _setup(tmp_path, lock_sha=None):
         f.chmod(0o755)
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    shutil.copy(SCRIPT, scripts / "setup_engine.sh")
+    body = "".join(f"{m} {hashlib.sha256(c).hexdigest()} {p}\n" for p, m, c in FIXTURE_FILES)
+    manifest_hash = hashlib.sha256(body.encode()).hexdigest()
+    (scripts / "zircolite-manifest.sha256").write_text("# synthetic manifest for the shim clone\n" + body)
+    text = re.sub(
+        r'ZIRCOLITE_MANIFEST_SHA256="[0-9a-f]{64}"', f'ZIRCOLITE_MANIFEST_SHA256="{manifest_hash}"', SCRIPT.read_text()
+    )
+    (scripts / "setup_engine.sh").write_text(text)
     sha = lock_sha or hashlib.sha256(REQ).hexdigest()
     (scripts / "zircolite-requirements.lock").write_text(
         f"# requirements-sha256: {sha}\norjson==3.10.0 \\\n    --hash=sha256:{'0' * 64}\n"
@@ -375,7 +375,8 @@ def test_clone_swapped_for_a_symlink_between_chmod_and_move_is_refused_before_an
 
     def swapping_chmod(bindir):
         (bindir / "chmod").write_text(
-            f'#!/bin/bash\n/bin/chmod "$@" || exit 1\n/bin/mv "$2" "$2.real" && ln -s {victim} "$2"\n'
+            f'#!/bin/bash\n/bin/chmod "$@" || exit 1\n'
+            f'case "$2" in Zircolite.setup.??????) /bin/mv "$2" "$2.real" && ln -s {victim} "$2" ;; esac\n'
         )
         (bindir / "chmod").chmod(0o755)
 
@@ -467,14 +468,13 @@ def test_ignored_file_in_the_moved_clone_is_refused(tmp_path):
     assert res.returncode != 0 and not _uv_installs(log)
 
 
-def test_a_clean_real_git_clone_passes_the_content_check(tmp_path):
+def test_a_clean_clone_passes_and_git_is_never_used_for_the_content(tmp_path):
     res, log, work = _run(tmp_path)
     assert res.returncode == 0, res.stderr
-    lines = log.splitlines()
-    assert any("ls-tree -r -z HEAD" in ln for ln in lines)
-    assert any("hash-object --no-filters -- " in ln for ln in lines)
-    assert not any(" status" in ln for ln in lines)  # the index is never consulted
-    assert all("core.hooksPath=/dev/null" in ln for ln in lines if ln.startswith("git["))
+    lines = [ln for ln in log.splitlines() if ln.startswith("git[")]
+    for sub in ("ls-tree", "hash-object", " status", "cat-file", "diff"):
+        assert not any(sub in ln for ln in lines), sub  # the object database/index are not consulted
+    assert all("core.hooksPath=/dev/null" in ln and "NR=1" in ln for ln in lines), lines
 
 
 def test_a_clone_without_a_git_dir_is_a_refusal_not_a_pass(tmp_path):
@@ -625,3 +625,74 @@ def test_quarantine_container_is_private_and_unpredictable(tmp_path):
     q = _untrusted(work)
     assert len(q) == 1 and _mode(q[0]) == 0o700
     assert not re.fullmatch(r"Zircolite\.untrusted\.\d{14}\.\d+", q[0].name)
+
+
+# --- round 6: pinned file manifest ------------------------------------------------------------
+
+
+def test_tampered_manifest_is_refused_before_cloning(tmp_path):
+    def tamper(bindir):  # change the manifest after the script's constant was derived from the original
+        manifest = bindir.parent / "scripts" / "zircolite-manifest.sha256"
+        manifest.write_text(manifest.read_text() + f"100644 {'0' * 64} evil.py\n")
+
+    res, log, work = _run(tmp_path, bin_hook=tamper)
+    assert res.returncode != 0 and "does not match the pinned" in res.stderr
+    assert "clone" not in log and not _uv_installs(log) and not (work / "Zircolite").exists()
+
+
+def test_consistent_but_forged_object_database_cannot_launder_a_modified_file(tmp_path):
+    # the clone's own git database is rewritten to agree with the evil file: only the pinned manifest can tell
+    tamper = (
+        'echo evil > "$d/zircolite.py"; "$SHIM_REAL_GIT" -C "$d" add -A; '
+        '"$SHIM_REAL_GIT" -C "$d" -c user.name=t -c user.email=t@t commit -q --amend -m forged'
+    )
+    _refused_by_content(tmp_path, tamper)
+
+
+def test_hardlinked_tracked_file_is_refused(tmp_path):
+    _refused_by_content(tmp_path, 'ln "$d/zircolite.py" "$d/../hardlink-to-zircolite"')
+
+
+def test_symlink_inside_the_tree_is_refused_even_when_untracked(tmp_path):
+    _refused_by_content(tmp_path, 'ln -s /etc "$d/lib/sub/link"')
+
+
+def test_generated_manifest_matches_the_pinned_constant_and_shape():
+    lines = (ROOT / "scripts" / "zircolite-manifest.sha256").read_text().splitlines()
+    body = [ln for ln in lines if not ln.startswith("#")]
+    header = {ln.split(": ")[0]: ln.split(": ")[1] for ln in lines if ln.startswith("# manifest-sha256: ")}
+    digest = hashlib.sha256(("\n".join(body) + "\n").encode()).hexdigest()
+    assert digest == header["# manifest-sha256"]
+    assert f'ZIRCOLITE_MANIFEST_SHA256="{digest}"' in SCRIPT.read_text()
+    rows = [ln.split(" ", 2) for ln in body]
+    assert len(rows) == 171 and [r[2] for r in rows] == sorted(r[2] for r in rows)
+    assert sum(r[0] == "100755" for r in rows) == 1 and sum(r[0] == "100644" for r in rows) == 170
+    assert all(re.fullmatch(r"[0-9a-f]{64}", r[1]) for r in rows) and len({r[2] for r in rows}) == 171
+    assert GOOD_SHA in lines[0] and GOOD_TREE in lines[0]
+
+
+@pytest.mark.network
+@pytest.mark.skipif(os.environ.get("SIGMAFORGE_NETWORK_TESTS") != "1", reason="opt-in: clones the real Zircolite tag")
+def test_committed_manifest_matches_a_genuine_checkout_of_the_pin(tmp_path):
+    clone = tmp_path / "Zircolite"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--branch",
+            "v3.7.6",
+            "https://github.com/wagga40/Zircolite.git",
+            str(clone),
+        ],
+        check=True,
+    )
+    out = subprocess.run(
+        ["python3", str(ROOT / "scripts" / "make_zircolite_manifest.py"), str(clone)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert out == (ROOT / "scripts" / "zircolite-manifest.sha256").read_text()

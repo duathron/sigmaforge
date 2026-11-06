@@ -57,3 +57,4 @@ extend = "tooling/ruff-base.toml"
 testpaths = ["tests"]
 # repo root on sys.path so the C1 semantic-equivalence gate can `import scripts.run7_backtest`
 pythonpath = ["."]
+markers = ["network: opt-in tests that clone the real engine (set SIGMAFORGE_NETWORK_TESTS=1)"]
