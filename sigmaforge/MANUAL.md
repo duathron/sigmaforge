@@ -241,7 +241,9 @@ records the full provenance to make any difference attributable:
 - `ruleset_sha`, `mapping_hash`, `benign_corpus_sha`, `recall_technique_map_sha` —
   verify both machines used the same inputs.
 - `provenance.zircolite_commit_sha` + `zircolite_tag` — the engine's exact source (the
-  version string alone is not enough).
+  version string alone is not enough). These values are read from the engine directory's own
+  `.git` at run time and are **not verified** by sigmaforge: only `setup_engine.sh` checks the
+  engine, once, at setup.
 - `provenance.environment` — `python_version`, `platform`, `sqlite_version`, and the
   `engine_deps` versions (pySigma + backend, orjson, lxml).
 
