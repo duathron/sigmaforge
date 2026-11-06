@@ -26,8 +26,10 @@ updates:
     groups:
       dev-deps:
         dependency-type: "development"
+        update-types: ["minor", "patch"]
       runtime-deps:
         dependency-type: "production"
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "build"
   # pre-commit hook revisions (.pre-commit-config.yaml).
