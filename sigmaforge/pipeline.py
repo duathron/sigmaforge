@@ -159,7 +159,13 @@ def _load_technique_map(path: str) -> dict:
         raise InputLoadError(path, what, "unreadable") from None
     except (RecursionError, ValueError) as e:
         raise _limit_error(path, what, e) from None
-    if not _tmap_ok(tmap):
+    except Exception:
+        raise InputLoadError(path, what, "malformed structure") from None
+    try:
+        ok = _tmap_ok(tmap)
+    except Exception:
+        ok = False
+    if not ok:
         raise InputLoadError(path, what, "malformed structure")
     return tmap
 
@@ -178,6 +184,8 @@ def _load_comiset_field_map(comiset_mapping: str) -> dict[str, str]:
         raise InputLoadError(comiset_mapping, what, "unreadable") from None
     except (RecursionError, ValueError) as e:
         raise _limit_error(comiset_mapping, what, e) from None
+    except Exception:
+        raise InputLoadError(comiset_mapping, what, "malformed structure") from None
     mappings = cfg.get("mappings") if isinstance(cfg, dict) else None
     if not isinstance(cfg, dict) or not (mappings is None or isinstance(mappings, dict)):
         raise InputLoadError(comiset_mapping, what, "malformed structure")
@@ -211,8 +219,12 @@ def _load_benign_sample(path: str, field_map: dict[str, str]) -> list[dict]:
             events.append(ev)
             if len(events) > BENIGN_SAMPLE_MAX_EVENTS:
                 raise InputLoadError(path, what, "too many events")
+    except InputLoadError:
+        raise
     except ReadRefused as e:
         raise InputLoadError(path, what, e.reason) from None
+    except Exception:
+        raise InputLoadError(path, what, "malformed structure") from None
     return events
 
 
@@ -221,6 +233,39 @@ def _project_event(src: dict, field_map: dict[str, str]) -> dict:
     for k, v in src.items():
         ev[field_map.get(k, k)] = v
     return ev
+
+
+def _count_json_nodes(root: object, limit: int) -> int:
+    """Nodes of a parsed JSON value (containers, dict keys, scalars), iteratively (no recursion).
+    Stops counting just past `limit`."""
+    n = 0
+    stack = [root]
+    while stack:
+        n += 1
+        if n > limit:
+            return n
+        x = stack.pop()
+        if isinstance(x, dict):
+            n += len(x)  # the keys
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+    return n
+
+
+def _check_rule_fields(path: str, rule: dict) -> None:
+    """The fields later stages index into, for rules that are in scope (level high/critical): a bad
+    shape is one value-free refusal here instead of a KeyError/TypeError deep in the run."""
+    if str(rule.get("level", "")).lower() not in ("high", "critical"):
+        return
+    title, tags, detection = rule.get("title"), rule.get("tags"), rule.get("detection", {})
+    if (
+        not isinstance(title, str)
+        or not title
+        or not (tags is None or (isinstance(tags, list) and all(isinstance(t, str) for t in tags)))
+        or not isinstance(detection, dict)
+    ):
+        raise RuleLoadError(path, "malformed rule structure")
 
 
 def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
@@ -240,7 +285,17 @@ def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
             if f.lower().endswith(".json"):
                 # a compiled ruleset: parsed by the C JSON parser (never the pure-Python YAML one), and a
                 # file that is not valid JSON is refused, not retried as YAML
+                # a compiled ruleset is one big file: it gets the whole remaining budget
+                budget = RULES_MAX_TOTAL_NODES - total_nodes
+                # cheap upper-bound check BEFORE parsing: every container opens with [ or {, so a
+                # file of millions of nested empty lists is refused without allocating them
+                if raw.count(b"[") + raw.count(b"{") > max(budget, 0):
+                    raise RuleLoadError(f, "too many JSON nodes")
                 top = json.loads(raw.decode("utf-8"))
+                nodes = _count_json_nodes(top, max(budget, 0))
+                if nodes > max(budget, 0):
+                    raise RuleLoadError(f, "too many JSON nodes")
+                total_nodes += nodes
                 docs = top if isinstance(top, list) else [top]
             else:
                 budget = min(RULE_FILE_MAX_NODES, RULES_MAX_TOTAL_NODES - total_nodes)
@@ -251,6 +306,7 @@ def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
                     continue
                 if not isinstance(doc, dict):  # a Sigma rule is a mapping: refuse before any deep walk
                     raise RuleLoadError(f, "malformed rule structure")
+                _check_rule_fields(f, doc)
                 rules.append(doc)
         except ReadRefused as e:
             raise RuleLoadError(f, e.reason) from None
@@ -268,9 +324,11 @@ def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
             raise
         except (OSError, ValueError):  # unreadable, or not valid text
             raise RuleLoadError(f, "unreadable") from None
+        except Exception:  # whatever else a hostile document makes a parser raise: never echo it
+            raise RuleLoadError(f, "unreadable") from None
     try:
         loaded, _ = partition_rules(rules)
-    except (ValueError, KeyError, TypeError, AttributeError):
+    except Exception:
         raise RuleLoadError(loaded_rules_glob, "malformed rule structure") from None
     return loaded
 

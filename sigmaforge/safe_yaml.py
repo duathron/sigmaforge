@@ -36,6 +36,13 @@ def _make_loader(max_nodes: int | None):
     return _Loader
 
 
+def _value_free(e: Exception) -> yaml.YAMLError:
+    """A YAML construction failure (`!!bool junk` raises a bare KeyError that echoes the value, other
+    tags raise TypeError/OverflowError/...) as a value-free `YAMLError`. Recursion and size limits
+    are re-raised before this is reached: callers handle them specifically."""
+    return yaml.YAMLError("invalid YAML value")
+
+
 def load_all(text: str, max_nodes: int | None = None) -> tuple[list, int]:
     """All documents of `text` and the number of YAML nodes they hold. Raises `YamlAliasError`,
     `YamlTooComplexError` or `yaml.YAMLError`."""
@@ -45,6 +52,10 @@ def load_all(text: str, max_nodes: int | None = None) -> tuple[list, int]:
         while loader.check_data():
             docs.append(loader.get_data())
         return docs, loader.nodes
+    except (yaml.YAMLError, RecursionError, ValueError):
+        raise
+    except Exception as e:
+        raise _value_free(e) from None
     finally:
         loader.dispose()
 
@@ -54,5 +65,9 @@ def load(text: str, max_nodes: int | None = None):
     loader = _make_loader(max_nodes)(text)
     try:
         return loader.get_single_data()
+    except (yaml.YAMLError, RecursionError, ValueError):
+        raise
+    except Exception as e:
+        raise _value_free(e) from None
     finally:
         loader.dispose()

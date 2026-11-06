@@ -1004,3 +1004,230 @@ def test_json_ruleset_with_a_single_rule_object_loads(tmp_path):
     f = tmp_path / "one.json"
     f.write_text(json.dumps({"title": "t", "level": "high", "detection": {"condition": "selection"}}))
     assert [r["title"] for r in pipeline._load_loaded_rules(str(f))] == ["t"]
+
+
+# --- fix round 6: any loader failure is one clean line; rule fields validated; JSON node budget --
+
+
+def _one_clean_line_no_secret(res, code):
+    assert res.exit_code == code, (res.exit_code, res.output, repr(res.exception))
+    assert "Traceback" not in res.output and "secretval" not in res.output.lower()
+    assert len(res.output.strip().splitlines()) == 1, res.output
+
+
+def test_safe_yaml_converts_construction_errors_to_a_value_free_yaml_error():
+    import yaml
+
+    from sigmaforge import safe_yaml
+
+    for fn in (safe_yaml.load, lambda t: safe_yaml.load_all(t)[0]):
+        with pytest.raises(yaml.YAMLError) as ei:
+            fn("x: !!bool SECRETVAL\n")
+        assert "secretval" not in str(ei.value).lower() and not isinstance(ei.value, KeyError)
+    with pytest.raises(RecursionError):  # limits keep their own, more specific, handlers
+        safe_yaml.load("[" * 100_000)
+
+
+def test_bool_tag_junk_in_config_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    cfg = _cfg(tmp_path, b"x: !!bool SECRETVAL\n")
+    _one_clean_line_no_secret(_backtest(tmp_path, ins, config=cfg), 2)
+
+
+def test_bool_tag_junk_in_comiset_mapping_is_one_clean_line(tmp_path):
+    ins = _inputs(tmp_path)
+    ins["cm"].write_text("x: !!bool SECRETVAL\n")
+    _one_clean_line_no_secret(_backtest(tmp_path, ins), 4)
+
+
+def test_bool_tag_junk_in_a_rule_is_one_clean_line(tmp_path):
+    f = tmp_path / "a.yml"
+    f.write_text("title: t\nlevel: high\nx: !!bool SECRETVAL\n")
+    _one_clean_line_no_secret(_rules_run(tmp_path, f), 4)
+
+
+class _Boom(Exception):
+    pass
+
+
+def _boom(*a, **k):
+    raise _Boom("SECRETVAL")
+
+
+def test_any_exception_in_the_config_loader_is_one_clean_line(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    monkeypatch.setattr("sigmaforge.safe_yaml.load", _boom)
+    _one_clean_line_no_secret(_backtest(tmp_path, ins, config=_cfg(tmp_path, b"a: 1\n")), 2)
+
+
+def test_any_exception_in_the_comiset_loader_is_one_clean_line(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    monkeypatch.setattr("sigmaforge.safe_yaml.load", _boom)
+    _one_clean_line_no_secret(_backtest(tmp_path, ins), 4)
+
+
+def test_any_exception_in_the_rule_loader_is_one_clean_line(tmp_path, monkeypatch):
+    f = tmp_path / "a.yml"
+    f.write_text("title: t\nlevel: high\n")
+    monkeypatch.setattr("sigmaforge.safe_yaml.load_all", _boom)
+    _one_clean_line_no_secret(_rules_run(tmp_path, f), 4)
+
+
+def test_any_exception_in_the_json_rule_loader_is_one_clean_line(tmp_path, monkeypatch):
+    f = tmp_path / "c.json"
+    f.write_text("{}")
+    monkeypatch.setattr("sigmaforge.pipeline.json.loads", _boom)
+    _one_clean_line_no_secret(_rules_run(tmp_path, f), 4)
+
+
+def test_any_exception_in_the_rule_partition_is_one_clean_line(tmp_path, monkeypatch):
+    f = tmp_path / "a.yml"
+    f.write_text("title: t\nlevel: high\n")
+    monkeypatch.setattr("sigmaforge.pipeline.partition_rules", _boom)
+    _one_clean_line_no_secret(_rules_run(tmp_path, f), 4)
+
+
+def test_any_exception_in_the_technique_map_loader_is_one_clean_line(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    monkeypatch.setattr("sigmaforge.pipeline._tmap_ok", _boom)
+    _one_clean_line_no_secret(_backtest(tmp_path, ins), 4)
+
+
+def test_any_exception_in_the_benign_sample_loader_is_one_clean_line(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    monkeypatch.setattr("sigmaforge.pipeline._project_event", _boom)
+    _one_clean_line_no_secret(_backtest(tmp_path, ins), 4)
+
+
+def test_any_exception_in_the_config_validator_is_one_clean_line(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    monkeypatch.setattr("sigmaforge.config.AppConfig.model_validate", _boom)
+    _one_clean_line_no_secret(_backtest(tmp_path, ins, config=_cfg(tmp_path, b"a: 1\n")), 2)
+
+
+# F2: rule field validation (in-scope rules: level high/critical)
+
+BAD_RULES = {
+    "missing_title": {"level": "high"},
+    "empty_title": {"title": "", "level": "high"},
+    "list_title": {"title": ["x"], "level": "high"},
+    "dict_title": {"title": {"a": 1}, "level": "high"},
+    "int_tags": {"title": "t", "level": "high", "tags": 5},
+    "tags_with_non_str": {"title": "t", "level": "high", "tags": ["attack.t1059", 5]},
+    "dict_tags": {"title": "t", "level": "high", "tags": {"a": 1}},
+    "int_detection": {"title": "t", "level": "critical", "detection": 5},
+    "list_detection": {"title": "t", "level": "high", "detection": ["x"]},
+}
+
+
+def _write_rule(tmp_path, rule, form):
+    if form == "yaml":
+        import yaml
+
+        f = tmp_path / "a.yml"
+        f.write_text(yaml.safe_dump(rule))
+    else:
+        f = tmp_path / "a.json"
+        f.write_text(json.dumps([rule]))
+    return f
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+@pytest.mark.parametrize("name", sorted(BAD_RULES))
+def test_malformed_rule_fields_are_one_clean_line(tmp_path, name, form):
+    f = _write_rule(tmp_path, BAD_RULES[name], form)
+    res = _rules_run(tmp_path, tmp_path / ("*" + f.suffix))  # a glob: the message must name the FILE
+    assert res.exit_code == 4 and "malformed rule structure" in res.output, res.output
+    assert "Traceback" not in res.output and len(res.output.strip().splitlines()) == 1
+    assert "a." in res.output and "*" not in res.output
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+def test_well_formed_rule_fields_are_accepted(tmp_path, form):
+    rule = {
+        "title": "t",
+        "level": "high",
+        "tags": ["attack.t1059"],
+        "detection": {"selection": {"a": 1}, "condition": "selection"},
+    }
+    res = _rules_run(tmp_path, _write_rule(tmp_path, rule, form))
+    assert "malformed rule structure" not in res.output and "Traceback" not in res.output
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+def test_out_of_scope_rules_with_odd_fields_are_not_rejected(tmp_path, form):
+    rule = {"level": "low", "tags": 5}
+    res = _rules_run(tmp_path, _write_rule(tmp_path, rule, form))
+    assert "malformed rule structure" not in res.output
+
+
+# LOW-1: JSON rulesets share the node budget
+
+
+def _json_rules(tmp_path, name="c.json"):
+    f = tmp_path / name
+    f.write_text(json.dumps([{"title": "t", "level": "low"}]))  # list + dict + 2 keys + 2 values = 6 nodes
+    return f
+
+
+def test_json_ruleset_node_budget_exact_count(tmp_path, monkeypatch):
+    f = _json_rules(tmp_path)
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 6)
+    assert "too many JSON nodes" not in _rules_run(tmp_path, f).output
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 5)
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and "too many JSON nodes" in res.output
+
+
+def test_json_ruleset_prescan_refuses_before_parsing(tmp_path, monkeypatch):
+    f = tmp_path / "c.json"
+    f.write_text("[" + "[]," * 50 + "[]]")
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 10)
+
+    def no_parse(*a, **k):
+        raise AssertionError("parsed")
+
+    monkeypatch.setattr("sigmaforge.pipeline.json.loads", no_parse)
+    res = _rules_run(tmp_path, f)
+    assert res.exit_code == 4 and "too many JSON nodes" in res.output
+
+
+def test_json_ruleset_total_node_budget_spans_files(tmp_path, monkeypatch):
+    d = tmp_path / "rs"
+    d.mkdir()
+    for i in range(2):
+        (d / f"c{i}.json").write_text(json.dumps([{"title": "t", "level": "low"}]))
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 11)
+    res = _rules_run(tmp_path, d / "*.json")
+    assert res.exit_code == 4 and "too many JSON nodes" in res.output
+    monkeypatch.setattr("sigmaforge.pipeline.RULES_MAX_TOTAL_NODES", 12)
+    assert "too many JSON nodes" not in _rules_run(tmp_path, d / "*.json").output
+
+
+def test_json_node_walk_is_iterative_not_recursive():
+    from sigmaforge import pipeline
+
+    deep = []
+    cur = deep
+    for _ in range(5000):  # deeper than the recursion limit
+        nxt = []
+        cur.append(nxt)
+        cur = nxt
+    assert pipeline._count_json_nodes(deep, 10**9) == 5001
+    assert pipeline._count_json_nodes({"a": [1, {"b": None}]}, 10**9) == 7
+
+
+def test_any_exception_in_the_technique_map_parser_is_one_clean_line(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    rules = tmp_path / "ok-rules.yml"
+    rules.write_text("title: t\nlevel: low\n")
+    monkeypatch.setattr("sigmaforge.pipeline.json.loads", _boom)  # first JSON user in a run: the technique map
+    res = _rules_run(tmp_path, rules)
+    assert ins and "Cannot load technique map" in res.output
+    _one_clean_line_no_secret(res, 4)
+
+
+def test_json_node_walk_stops_just_past_the_limit():
+    from sigmaforge import pipeline
+
+    assert pipeline._count_json_nodes(list(range(1000)), 3) == 4

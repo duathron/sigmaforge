@@ -75,6 +75,8 @@ def _load_yaml(path: Path) -> dict:
         raise ConfigError(path, "too deeply nested") from None
     except ValueError:  # e.g. the int-conversion digit limit
         raise ConfigError(path, "value out of range") from None
+    except Exception:  # whatever else a hostile document makes the parser raise: never echo it
+        raise ConfigError(path, "unreadable") from None
     if not isinstance(data, dict):
         raise ConfigError(path, "config must be a YAML mapping")
     bt = data.get("backtest")
@@ -96,6 +98,8 @@ def _validate(data: dict, path: object) -> AppConfig:
     except ValidationError as e:
         fields = sorted({".".join(str(p) for p in err["loc"]) or "<root>" for err in e.errors()})
         raise ConfigError(path, "invalid field(s): " + ", ".join(fields)) from None
+    except Exception:
+        raise ConfigError(path, "unreadable") from None
 
 
 def load(config_path: Optional[Path] = None) -> AppConfig:
