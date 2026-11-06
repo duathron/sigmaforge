@@ -24,3 +24,17 @@ def plain_safe_capped(x: object, limit: int = ERROR_CAP) -> str:
     s = str(x)
     cut = len(s) > limit
     return plain_safe(s[:limit]) + (_TRUNCATED if cut else "")
+
+
+_BRACKET = re.compile(r"(\\*)\[")
+
+
+def markup_escape(s: str) -> str:
+    """Escape EVERY `[` for a Rich markup sink (`rich.markup.escape` leaves unterminated tags raw,
+    so two values in one string, or a value before a trusted tag, could form a live tag).
+    A backslash run directly before `[` is doubled and the bracket gets one more backslash (odd
+    run = literal bracket). A trailing backslash run is made EVEN so it cannot escape a trusted
+    tag that follows the value."""
+    out = _BRACKET.sub(lambda m: m.group(1) * 2 + "\\[", s)
+    run = len(out) - len(out.rstrip("\\"))
+    return out + "\\" if run % 2 else out

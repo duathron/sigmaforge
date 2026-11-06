@@ -11,14 +11,13 @@ from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from shipwright_kit.cli import build_typer
 
 from sigmaforge import __version__
 from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
 from sigmaforge.ingest.ruleload import RuleLoadError
 from sigmaforge.ingest.zircolite_runner import EngineRunError
-from sigmaforge.safe_text import plain_safe, plain_safe_capped
+from sigmaforge.safe_text import markup_escape, plain_safe, plain_safe_capped
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
 app.pretty_exceptions_show_locals = False  # a traceback must never dump locals (rule text, paths)
@@ -30,7 +29,7 @@ def _rich_safe(x: object) -> str:
     space (no forged output lines), control/ANSI/bidi stripped, then markup escaped.
     Not `safe_render(x)` alone: that doubles backslashes (Windows paths) on the console.
     Print the result with `soft_wrap=True` so Rich cannot re-wrap it into a new line start."""
-    return escape(plain_safe(x))
+    return markup_escape(plain_safe(x))
 
 
 @app.command()
@@ -47,7 +46,7 @@ def manual() -> None:
 def _err_safe(x: object) -> str:
     """An untrusted ERROR message for a Rich sink: single line, sanitized, capped at 600 characters
     (a multi-megabyte message must not hang the console)."""
-    return escape(plain_safe_capped(x))
+    return markup_escape(plain_safe_capped(x))
 
 
 def _engine_refused(err: Exception) -> NoReturn:

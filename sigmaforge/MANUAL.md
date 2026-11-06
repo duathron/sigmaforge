@@ -181,7 +181,7 @@ threads or `atexit` hooks that outlive the call). Only a malicious engine can us
 malicious engine already runs with your privileges.
 There is also no timeout on the engine subprocess: a hung engine hangs the command.
 
-Error messages from the engine are capped at 600 characters (a `[truncated]` marker shows a cut),
+Error messages from the engine are cut at about 600 characters (a `[truncated]` marker shows a cut; escaping square brackets for the terminal can make the printed line somewhat longer),
 and a detection file that is missing or not valid JSON after an exit status of 0 is reported as
 `Detection engine failed` (exit 1).
 
