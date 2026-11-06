@@ -91,7 +91,7 @@ not lifted as prose.
 ### Config — reuse the existing system
 Extend `sigmaforge/config.py` `AppConfig` (currently only `output`) with: rules path,
 attack corpus + technique_map, benign corpus + mapping, engine_home, floor. Keep the
-existing `shipwright_kit.config` loader + YAML discovery chain (explicit > 
+existing `shipwright_kit.config` loader + YAML discovery chain (explicit >
 `~/.sigmaforge/config.yaml` > `./config.yaml` > defaults; *Superseded: the `./config.yaml` (current directory) source was removed — see MANUAL.md 'Where the engine comes from'.*). Do **NOT** introduce
 `sigmaforge.toml` (second config system) and do **NOT** bake repo `data/` absolute paths
 into the pip-package defaults — defaults are repo-relative/None and produce a teaching
