@@ -42,15 +42,18 @@ safe_git() {
 }
 
 # check_content DIR: the working tree matches the pinned manifest exactly. Reads only the files
-# themselves and the manifest: never git (object database, index, attributes, filters, hooks).
+# themselves and the manifest text read ONCE at startup ($MANIFEST_TEXT, the same bytes that were
+# pin-checked): never git (object database, index, attributes, filters, hooks). Run with `-I` so
+# nothing in the current directory or the environment can shadow a standard module.
 check_content() {
-    python3 - "$1" "$MANIFEST" <<'PY'
+    ZM="$MANIFEST_TEXT" python3 -I - "$1" <<'PY'
 import hashlib
 import os
 import stat
 import sys
 
-d, manifest = sys.argv[1], sys.argv[2]
+d = sys.argv[1]
+BAD_BITS = 0o7022  # setuid, setgid, sticky, group/other-writable
 
 
 def fail(msg):
@@ -60,35 +63,21 @@ def fail(msg):
 
 expected = {}
 dirs = set()
-with open(manifest, encoding="utf-8") as fh:
-    for line in fh:
-        if line.startswith("#") or not line.strip():
-            continue
-        mode, digest, rel = line.rstrip("\n").split(" ", 2)
-        expected[rel] = (mode, digest)
-        parts = rel.split("/")
-        for n in range(1, len(parts)):
-            dirs.add("/".join(parts[:n]))
+for line in os.environ["ZM"].split("\n"):
+    if line.startswith("#") or not line.strip():
+        continue
+    mode, digest, rel = line.split(" ", 2)
+    expected[rel] = (mode, digest)
+    parts = rel.split("/")
+    for n in range(1, len(parts)):
+        dirs.add("/".join(parts[:n]))
 if not expected:
     fail("the manifest is empty")
 git_dir = os.path.join(d, ".git")
 if os.path.islink(git_dir) or not os.path.isdir(git_dir):
     fail(".git is not a real directory")
-for rel, (mode, digest) in expected.items():
-    full = os.path.join(d, rel)
-    try:
-        st = os.lstat(full)
-    except OSError:
-        fail("missing file " + repr(rel))
-    if not stat.S_ISREG(st.st_mode):
-        fail("not a regular file (symlink or other): " + repr(rel))
-    if st.st_nlink != 1:
-        fail("hardlinked file: " + repr(rel))
-    if bool(st.st_mode & 0o100) != (mode == "100755"):
-        fail("mode differs for " + repr(rel))
-    with open(full, "rb") as fh:
-        if hashlib.sha256(fh.read()).hexdigest() != digest:
-            fail("content differs for " + repr(rel))
+if os.lstat(d).st_mode & BAD_BITS:
+    fail("loose permissions on the clone directory")
 actual = set()
 for root, dnames, fnames in os.walk(d, followlinks=False):
     rel_root = os.path.relpath(root, d)
@@ -98,11 +87,32 @@ for root, dnames, fnames in os.walk(d, followlinks=False):
     for name in dnames + fnames:
         rel = name if rel_root == "." else rel_root + "/" + name
         actual.add(rel)
-        if os.path.islink(os.path.join(root, name)):
+        st = os.lstat(os.path.join(root, name))
+        if stat.S_ISLNK(st.st_mode):
             fail("symbolic link in the tree: " + repr(rel))
+        if st.st_mode & BAD_BITS:
+            fail("group/other-writable or setuid/setgid/sticky entry: " + repr(rel))
 want = set(expected) | dirs
 if actual != want:
     fail("working tree differs from the manifest (extra: %r, missing: %r)" % (sorted(actual - want)[:3], sorted(want - actual)[:3]))
+for rel, (mode, digest) in expected.items():
+    # open without following links or blocking (a FIFO), then judge the opened file itself
+    try:
+        fd = os.open(os.path.join(d, rel), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        fail("cannot open (missing, symlink or special file): " + repr(rel))
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            fail("not a regular file: " + repr(rel))
+        if st.st_nlink != 1:
+            fail("hardlinked file: " + repr(rel))
+        if st.st_mode & BAD_BITS:
+            fail("group/other-writable or setuid/setgid/sticky file: " + repr(rel))
+        if bool(st.st_mode & 0o100) != (mode == "100755"):
+            fail("mode differs for " + repr(rel))
+        if hashlib.sha256(fh.read()).hexdigest() != digest:
+            fail("content differs for " + repr(rel))
 PY
 }
 
@@ -121,7 +131,7 @@ verify_dir() {
         return 1
     fi
     want="$(sed -n 's/^# requirements-sha256: \([0-9a-f]\{64\}\)$/\1/p' "$LOCK" | head -n 1)"
-    have="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$d/requirements.txt")"
+    have="$(python3 -I -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$d/requirements.txt")"
     if [ -z "$want" ] || [ "$want" != "$have" ]; then
         VERIFY_ERR="$d/requirements.txt (sha256 $have) does not match the lock ($want); regenerate scripts/zircolite-requirements.lock (command in its header)"
         return 1
@@ -151,7 +161,8 @@ refuse_if_link() {
     fi
 }
 
-manifest_have="$(python3 -c 'import hashlib,sys;print(hashlib.sha256("".join(l for l in open(sys.argv[1], encoding="utf-8") if not l.startswith("#")).encode()).hexdigest())' "$MANIFEST")"
+MANIFEST_TEXT="$(cat "$MANIFEST")"  # read ONCE: the pin check and the content check use these same bytes
+manifest_have="$(ZM="$MANIFEST_TEXT" python3 -I -c 'import hashlib,os;print(hashlib.sha256("".join(l + "\n" for l in os.environ["ZM"].split("\n") if l and not l.startswith("#")).encode()).hexdigest())')"
 if [ "$manifest_have" != "$ZIRCOLITE_MANIFEST_SHA256" ]; then
     echo "[setup] ERROR: $MANIFEST (body sha256 $manifest_have) does not match the pinned $ZIRCOLITE_MANIFEST_SHA256; nothing was cloned or installed." >&2
     exit 1
@@ -159,7 +170,8 @@ fi
 
 NEW="$(mktemp -d "${DEST}.setup.XXXXXX")"
 echo "[setup] cloning Zircolite $ZIRCOLITE_VERSION into $NEW ..."
-safe_git clone --depth 1 --branch "$ZIRCOLITE_VERSION" "$ZIRCOLITE_REPO" "$NEW"
+# a umask like 002 would create group-writable files, which the verification rejects
+(umask 022; safe_git clone --depth 1 --branch "$ZIRCOLITE_VERSION" "$ZIRCOLITE_REPO" "$NEW")
 
 if ! verify_dir "$NEW"; then
     echo "[setup] ERROR: $VERIFY_ERR." >&2
