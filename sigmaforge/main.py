@@ -6,6 +6,9 @@ Exit-code table (canonical, owned here):
 
 from __future__ import annotations
 
+import os
+import stat
+import tempfile
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -49,6 +52,82 @@ def _err_safe(x: object) -> str:
     """An untrusted ERROR message for a Rich sink: single line, sanitized, capped at 600 characters
     (a multi-megabyte message must not hang the console)."""
     return markup_escape(plain_safe_capped(x))
+
+
+def _output_refused(path: object, reason: str) -> NoReturn:
+    """The output location cannot be written. A bad `--out` is a usage error (exit 2)."""
+    console.print(f"[red]Cannot write output[/red] {_err_safe(path)}: {reason}", soft_wrap=True, highlight=False)
+    raise typer.Exit(2) from None
+
+
+def _name_max(parent: Path) -> int:
+    try:
+        return os.pathconf(parent, "PC_NAME_MAX")
+    except (OSError, ValueError, AttributeError):
+        return 255
+
+
+def _target_state(t: Path) -> str:
+    """'ok' (a regular file, or absent and creatable), or the reason it is refused. Symlinks are
+    FOLLOWED: the final target must be a regular file or must not exist (a dangling link is refused)."""
+    try:
+        st = os.stat(t)
+    except FileNotFoundError:
+        return "not a regular file" if os.path.islink(t) else "ok"
+    if stat.S_ISDIR(st.st_mode):
+        return "is a directory"
+    if not stat.S_ISREG(st.st_mode):  # FIFO, device (/dev/null), socket
+        return "not a regular file"
+    return "ok" if os.access(t, os.W_OK) else "not writable"
+
+
+def _check_output(out: str, sibling_suffix: str | None = None) -> Path:
+    """Verify the output location BEFORE the (long) run: refuse an empty/root name, a non-regular
+    target (directory, FIFO, device, socket, dangling link), an unwritable parent or file, and a name
+    longer than the filesystem allows. A short probe file proves the directory is writable (the
+    stdlib removes it on close). Returns the output path."""
+    path = Path(out)
+    try:
+        if path.name in ("", ".."):  # Path(".") and Path("/") have the name ""
+            _output_refused(out, "no file name")
+        targets = [path] + ([path.with_suffix(sibling_suffix)] if sibling_suffix else [])
+        parent = path.parent if str(path.parent) else Path(".")
+        parent.mkdir(parents=True, exist_ok=True)
+        limit = _name_max(parent)
+        if any(len(os.fsencode(t.name)) > limit for t in targets):
+            _output_refused(out, "name too long")
+        states = [_target_state(t) for t in targets]
+        for state in states:
+            if state != "ok":
+                _output_refused(out, state)
+        if not all(os.path.exists(t) for t in targets):
+            # a file still to be created needs a writable directory; when every target already exists
+            # (and passed the regular-file and writable checks above) the directory itself may be read-only
+            with tempfile.NamedTemporaryFile(dir=parent, prefix=".sigmaforge-probe-"):
+                pass
+    except (OSError, ValueError):
+        _output_refused(out, "not writable")
+    return path
+
+
+def _write_output(path: Path, text: str, encoding: str = "utf-8", errors: str = "strict") -> None:
+    """Write one output file; a failure is one value-free line (exit 2), never a traceback or a hang.
+    The file is opened non-blocking and checked with fstat BEFORE it is truncated, so a FIFO swapped in
+    after the preflight is refused instead of blocking. Symlinks are followed (as in the preflight)."""
+    try:
+        data = text.encode(encoding, errors)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0), 0o644)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                _output_refused(path, "not a regular file")
+            os.ftruncate(fd, 0)
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view) :]
+        finally:
+            os.close(fd)
+    except (OSError, ValueError):
+        _output_refused(path, "not writable")
 
 
 def _engine_refused(err: Exception) -> NoReturn:
@@ -152,6 +231,8 @@ def backtest(
         )
         raise typer.Exit(3)
 
+    out_path = _check_output(out, ".manifest.json")
+
     evtx_cfg = str(engine_root / "Zircolite" / "config" / "fieldMappings.yaml")
     # The engine consumes a COMPILED ruleset JSON. C3.1 lifts an in-process compiler;
     # until then resolve a pre-compiled ruleset: a .json `rules` IS the compiled ruleset,
@@ -202,11 +283,11 @@ def backtest(
         )
         raise typer.Exit(4)
 
-    out_path = Path(out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(res.report_md)
+    # backslashreplace: text that cannot be encoded (a lone surrogate) is written as an escape instead of
+    # crashing after the whole engine run, and the report stays complete (no new exit code, no lost run)
+    _write_output(out_path, res.report_md, encoding="utf-8", errors="backslashreplace")
     manifest_path = out_path.with_suffix(".manifest.json")
-    manifest_path.write_text(json.dumps(res.manifest, indent=2, sort_keys=True))
+    _write_output(manifest_path, json.dumps(res.manifest, indent=2, sort_keys=True))
     console.print(f"report written: {_rich_safe(out_path)}", soft_wrap=True)
     console.print(f"manifest written: {_rich_safe(manifest_path)}", soft_wrap=True)
     console.print(
@@ -267,6 +348,8 @@ def hunt(
         )
         raise typer.Exit(3)
 
+    out_path = _check_output(out)
+
     rules_path = Path(rules)
     rule_files = sorted(rules_path.rglob("*.yml")) if rules_path.is_dir() else [rules_path]
 
@@ -311,10 +394,7 @@ def hunt(
         "hit_count": len(hits),
         "hits": hits,
     }
-    out_path = Path(out)
-    if out_path.parent != Path(""):
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+    _write_output(out_path, json.dumps(result, indent=2, sort_keys=True))
 
     console.print(f"[yellow]{_HUNT_BANNER}[/yellow]")
     console.print(
