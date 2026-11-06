@@ -32,6 +32,7 @@ from sigmaforge.orchestrate import run_backtest
 from sigmaforge.provenance import provenance
 from sigmaforge.records import MatchRecord
 from sigmaforge.runmanifest import build_manifest, run_hash
+from sigmaforge.safe_read import ReadRefused, iter_lines_capped, read_capped
 from sigmaforge.score.acceptance import GateResult, assert_one_source
 from sigmaforge.score.recall import rule_techniques
 
@@ -81,6 +82,12 @@ def _sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
+#: Size caps per user-supplied input (refused as "too large" beyond these).
+TECHNIQUE_MAP_MAX_BYTES = 64 * 1024 * 1024
+COMISET_MAPPING_MAX_BYTES = 1024 * 1024
+BENIGN_SAMPLE_MAX_BYTES = 1024 * 1024 * 1024
+
+
 class InputLoadError(ValueError):
     """A user-supplied non-rule input (technique map, benign sample, COMISET mapping) could not be
     read or parsed. `path` is the offending file (untrusted text: sanitize at the sink); `what`
@@ -96,13 +103,12 @@ def _limit_error(path: object, what: str, e: BaseException) -> InputLoadError:
     """Depth, size or int-conversion limits hit while parsing (value-free reason)."""
     if isinstance(e, RecursionError):
         return InputLoadError(path, what, "too deeply nested")
-    if isinstance(e, MemoryError):
-        return InputLoadError(path, what, "too large")
     return InputLoadError(path, what, "value out of range")
 
 
 def _is_int(x: object) -> bool:
-    return isinstance(x, int) and not isinstance(x, bool)
+    """A count: an int (not a bool) that is not negative."""
+    return isinstance(x, int) and not isinstance(x, bool) and x >= 0
 
 
 def _tmap_ok(tmap: object) -> bool:
@@ -121,12 +127,14 @@ def _tmap_ok(tmap: object) -> bool:
 def _load_technique_map(path: str) -> dict:
     what = "technique map"
     try:
-        tmap = json.loads(Path(path).read_text(encoding="utf-8"))
+        tmap = json.loads(read_capped(path, TECHNIQUE_MAP_MAX_BYTES).decode("utf-8"))
+    except ReadRefused as e:
+        raise InputLoadError(path, what, e.reason) from None
     except json.JSONDecodeError:
         raise InputLoadError(path, what, "invalid JSON") from None
-    except (OSError, UnicodeDecodeError):  # missing/unreadable, or not valid UTF-8 text
+    except UnicodeDecodeError:
         raise InputLoadError(path, what, "unreadable") from None
-    except (RecursionError, MemoryError, ValueError) as e:
+    except (RecursionError, ValueError) as e:
         raise _limit_error(path, what, e) from None
     if not _tmap_ok(tmap):
         raise InputLoadError(path, what, "malformed structure")
@@ -136,13 +144,14 @@ def _load_technique_map(path: str) -> dict:
 def _load_comiset_field_map(comiset_mapping: str) -> dict[str, str]:
     what = "COMISET mapping"
     try:
-        with open(comiset_mapping, encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh)
+        cfg = yaml.safe_load(read_capped(comiset_mapping, COMISET_MAPPING_MAX_BYTES).decode("utf-8"))
+    except ReadRefused as e:
+        raise InputLoadError(comiset_mapping, what, e.reason) from None
     except yaml.YAMLError:
         raise InputLoadError(comiset_mapping, what, "invalid YAML") from None
-    except (OSError, UnicodeDecodeError):  # missing/unreadable, or not valid UTF-8 text
+    except UnicodeDecodeError:
         raise InputLoadError(comiset_mapping, what, "unreadable") from None
-    except (RecursionError, MemoryError, ValueError) as e:
+    except (RecursionError, ValueError) as e:
         raise _limit_error(comiset_mapping, what, e) from None
     mappings = cfg.get("mappings") if isinstance(cfg, dict) else None
     if not isinstance(cfg, dict) or not (mappings is None or isinstance(mappings, dict)):
@@ -160,26 +169,23 @@ def _load_benign_sample(path: str, field_map: dict[str, str]) -> list[dict]:
     what = "benign sample"
     events: list[dict] = []
     try:
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    doc = json.loads(line)
-                except json.JSONDecodeError:
-                    raise InputLoadError(path, what, "invalid JSON on a line") from None
-                except (RecursionError, ValueError) as e:  # nesting / int-conversion limits
-                    raise _limit_error(path, what, e) from None
-                src = doc.get("_source", {}) if isinstance(doc, dict) else None
-                if not isinstance(src, dict) or not isinstance(src.get("sigmaforge_label", "benign"), str):
-                    raise InputLoadError(path, what, "malformed line (not an object with an object _source)")
-                ev = _project_event(src, field_map)
-                ev["sigmaforge_label"] = src.get("sigmaforge_label", "benign")
-                events.append(ev)
-    except InputLoadError:
-        raise
-    except (OSError, UnicodeDecodeError):  # missing/unreadable, or not valid UTF-8 text
-        raise InputLoadError(path, what, "unreadable") from None
-    except MemoryError as e:
-        raise _limit_error(path, what, e) from None
+        for raw in iter_lines_capped(path, BENIGN_SAMPLE_MAX_BYTES):
+            try:
+                doc = json.loads(raw.decode("utf-8"))
+            except UnicodeDecodeError:
+                raise InputLoadError(path, what, "unreadable") from None
+            except json.JSONDecodeError:
+                raise InputLoadError(path, what, "invalid JSON on a line") from None
+            except (RecursionError, ValueError) as e:  # nesting / int-conversion limits
+                raise _limit_error(path, what, e) from None
+            src = doc.get("_source", {}) if isinstance(doc, dict) else None
+            if not isinstance(src, dict) or not isinstance(src.get("sigmaforge_label", "benign"), str):
+                raise InputLoadError(path, what, "malformed line (not an object with an object _source)")
+            ev = _project_event(src, field_map)
+            ev["sigmaforge_label"] = src.get("sigmaforge_label", "benign")
+            events.append(ev)
+    except ReadRefused as e:
+        raise InputLoadError(path, what, e.reason) from None
     return events
 
 

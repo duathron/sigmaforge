@@ -91,10 +91,12 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 |------|---------|
 | 0 | success |
 | 1 | the engine failed: its process exited non-zero, or the in-process rule compile raised or exited (a short, sanitized tail of its output is shown) |
-| 2 | usage error (bad/missing flags), OR a config file that cannot be used (unreadable, not UTF-8, invalid YAML, not a mapping, or a field of the wrong type; one line naming the file and the field names, never the values) |
+| 2 | usage error (bad/missing flags), OR a config file that cannot be used (an explicit `--config` that does not exist, not a regular file such as a FIFO or device, larger than 1 MiB, unreadable, not UTF-8, invalid YAML, not a mapping, or a field of the wrong type; one line naming the file and the field names, never the values) |
 | 3 | engine not found or `--engine-home` / `engine_home` empty — run `scripts/setup_engine.sh` (then `--engine-home`, config `engine_home` or `$SIGMAFORGE_HOME`) |
-| 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora; also `backtest` when a rule file, the technique map, the benign sample or the COMISET mapping cannot be read or parsed (one line naming the file; the file's contents are never echoed) |
+| 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora; also `backtest` when a rule file, the technique map, the benign sample or the COMISET mapping cannot be read or parsed (missing, not a regular file such as a FIFO or device, over the size cap, or malformed; one line naming the file; the file's contents are never echoed) |
 | 5 | acceptance gate FAILED (engine fires ≠ scored fires) |
+
+Input files are opened without blocking and read only if they are regular files within a size cap: config 1 MiB, COMISET mapping 1 MiB, technique map 64 MiB, benign sample 1 GiB; a larger file is refused as `too large`.
 
 Codes 3 and 4 are **teaching errors**: they name what to run and never print a
 traceback or an empty report.
