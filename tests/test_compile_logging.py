@@ -275,3 +275,53 @@ def test_failure_tail_keeps_exactly_the_last_5_lines(tmp_path, monkeypatch, capf
         _compile(tmp_path, monkeypatch, body, "raise RuntimeError('x')")
     err = capfd.readouterr().err
     assert [i for i in range(20) if f"LINE{i:02d}" in err] == [15, 16, 17, 18, 19]
+
+
+# --- round 6: every exception path, hostile __str__, exit-0 pin --------------------------------
+
+
+def test_engine_base_exception_subclass_is_wrapped_and_clean(tmp_path, monkeypatch, clean_modules):
+    body = f"class B(BaseException): pass\n        raise B({HOSTILE_EXC!r})"
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, body)
+    _assert_no_raw(str(ei.value))
+
+
+def test_engine_exception_with_raising_str_is_wrapped_and_clean(tmp_path, monkeypatch, clean_modules):
+    body = (
+        "class E(Exception):\n"
+        "            def __str__(self):\n"
+        f"                raise ValueError({HOSTILE_EXC!r})\n"
+        "        raise E()"
+    )
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, body)
+    _assert_no_raw(str(ei.value))
+    assert str(ei.value) == "E"
+
+
+@pytest.mark.parametrize("call", ["sys.exit()", "sys.exit(None)"])
+def test_engine_system_exit_none_stays_exit_0(tmp_path, monkeypatch, clean_modules, call):
+    with pytest.raises(SystemExit) as ei:
+        _compile(tmp_path, monkeypatch, call)
+    assert ei.value.code is None
+
+
+def test_hunt_exits_1_for_a_base_exception_subclass(tmp_path, monkeypatch, clean_modules):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    _channel_engine(tmp_path / "eng", f"class B(BaseException): pass\n        raise B({HOSTILE_EXC!r})")
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yml").write_text("title: a\n")
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    res = CliRunner().invoke(
+        app, ["hunt", "--rules", str(rules), "--logs", str(logs), "--engine-home", str(tmp_path / "eng")]
+    )
+    assert res.exit_code == 1, res.output
+    _assert_no_raw(res.output)

@@ -128,9 +128,11 @@ def _captured_engine_output() -> Iterator[None]:
             raise
         if isinstance(exc, SystemExit):
             raise SystemExit(1) from None
-        if isinstance(exc, Exception):
-            raise EngineCompileError(plain_safe(str(exc))) from None
-        raise
+        try:
+            msg = plain_safe(str(exc))
+        except Exception:  # a hostile __str__ must not escape the sanitizer
+            msg = plain_safe(type(exc).__name__)
+        raise EngineCompileError(msg) from None
     finally:
         root.handlers = saved_root_handlers
         logging.lastResort = saved_last_resort
