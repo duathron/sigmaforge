@@ -214,19 +214,19 @@ def test_engine_exception_becomes_sanitized_compile_error(tmp_path, monkeypatch,
     assert "\n" not in str(ei.value) and ei.value.__cause__ is None and ei.value.__suppress_context__
 
 
-def test_engine_system_exit_with_text_becomes_exit_1_and_tail_is_clean(tmp_path, monkeypatch, capfd, clean_modules):
-    with pytest.raises(SystemExit) as ei:
+@pytest.mark.parametrize("call", ["sys.exit()", "sys.exit(None)", "sys.exit(0)", "sys.exit(3)"])
+def test_engine_system_exit_is_a_compile_failure(tmp_path, monkeypatch, clean_modules, call):
+    with pytest.raises(EngineCompileError, match=r"engine exited during compile \(code \d\)"):
+        _compile(tmp_path, monkeypatch, call)
+
+
+def test_engine_system_exit_with_text_is_a_clean_compile_failure(tmp_path, monkeypatch, capfd, clean_modules):
+    with pytest.raises(EngineCompileError) as ei:
         _compile(tmp_path, monkeypatch, f"print({HOSTILE_EXC!r}, file=sys.stderr); sys.exit({HOSTILE_EXC!r})")
-    assert ei.value.code == 1
+    assert str(ei.value) == "engine exited during compile (code text)"
     cap = capfd.readouterr()
     _assert_no_raw(cap.err)
     assert "boom" in cap.err
-
-
-def test_engine_system_exit_with_int_code_is_unchanged(tmp_path, monkeypatch, clean_modules):
-    with pytest.raises(SystemExit) as ei:
-        _compile(tmp_path, monkeypatch, "sys.exit(7)")
-    assert ei.value.code == 7
 
 
 def test_keyboard_interrupt_propagates_unchanged(tmp_path, monkeypatch, clean_modules):
@@ -300,11 +300,24 @@ def test_engine_exception_with_raising_str_is_wrapped_and_clean(tmp_path, monkey
     assert str(ei.value) == "E"
 
 
-@pytest.mark.parametrize("call", ["sys.exit()", "sys.exit(None)"])
-def test_engine_system_exit_none_stays_exit_0(tmp_path, monkeypatch, clean_modules, call):
-    with pytest.raises(SystemExit) as ei:
-        _compile(tmp_path, monkeypatch, call)
-    assert ei.value.code is None
+def test_hunt_exits_1_when_the_engine_calls_sys_exit_0(tmp_path, monkeypatch, clean_modules):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    _channel_engine(tmp_path / "eng", "sys.exit(0)")
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yml").write_text("title: a\n")
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    res = CliRunner().invoke(
+        app, ["hunt", "--rules", str(rules), "--logs", str(logs), "--engine-home", str(tmp_path / "eng")]
+    )
+    assert res.exit_code == 1, res.output
+    assert "engine exited during compile" in res.output
 
 
 def test_hunt_exits_1_for_a_base_exception_subclass(tmp_path, monkeypatch, clean_modules):

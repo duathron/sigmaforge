@@ -124,10 +124,12 @@ def _captured_engine_output() -> Iterator[None]:
         tail = "\n".join(text.splitlines()[-5:])[-600:]
         if tail:
             real_err.write(plain_safe(tail) + "\n")
-        if isinstance(exc, EngineNotFoundError) or (isinstance(exc, SystemExit) and isinstance(exc.code, int | None)):
+        if isinstance(exc, EngineNotFoundError):
             raise
         if isinstance(exc, SystemExit):
-            raise SystemExit(1) from None
+            # any exit inside the compile means no ruleset: never let it pass as success
+            code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else "text")
+            raise EngineCompileError(f"engine exited during compile (code {code})") from None
         try:
             msg = plain_safe(str(exc))
         except Exception:  # a hostile __str__ must not escape the sanitizer

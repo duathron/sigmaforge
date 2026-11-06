@@ -90,7 +90,7 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 | Code | Meaning |
 |------|---------|
 | 0 | success |
-| 1 | the engine process itself failed (a short, sanitized tail of its stderr is shown) |
+| 1 | the engine failed: its process exited non-zero, or the in-process rule compile raised or exited (a short, sanitized tail of its output is shown) |
 | 2 | usage error (bad/missing flags) |
 | 3 | engine not found or `--engine-home` / `engine_home` empty — run `scripts/setup_engine.sh` (then `--engine-home`, config `engine_home` or `$SIGMAFORGE_HOME`) |
 | 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora |
