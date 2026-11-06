@@ -13,4 +13,3 @@ preset: security
 project_name: sigmaforge
 pypi_name: sigmaforge
 python_version: '3.11'
-
