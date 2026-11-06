@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from sigmaforge.ingest.ruleload import partition_rules
+from sigmaforge.ingest.ruleload import RuleLoadError, partition_rules
 from sigmaforge.ingest.zircolite_runner import run_shard
 from sigmaforge.orchestrate import run_backtest
 from sigmaforge.provenance import provenance
@@ -101,11 +101,19 @@ def _project_event(src: dict, field_map: dict[str, str]) -> dict:
 def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
     rules = []
     for f in glob.glob(loaded_rules_glob):
-        with open(f) as fh:
-            for doc in yaml.safe_load_all(fh):
-                if doc:
-                    rules.append(doc)
-    loaded, _ = partition_rules(rules)
+        try:
+            with open(f) as fh:
+                for doc in yaml.safe_load_all(fh):
+                    if doc:
+                        rules.append(doc)
+        except yaml.YAMLError:
+            raise RuleLoadError(f, "invalid YAML") from None
+        except (OSError, ValueError):  # unreadable, or not valid text
+            raise RuleLoadError(f, "unreadable") from None
+    try:
+        loaded, _ = partition_rules(rules)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise RuleLoadError(loaded_rules_glob, "malformed rule structure") from None
     return loaded
 
 

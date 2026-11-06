@@ -406,3 +406,122 @@ def test_hunt_exits_1_for_a_base_exception_subclass(tmp_path, monkeypatch, clean
     )
     assert res.exit_code == 1, res.output
     _assert_no_raw(res.output)
+
+
+# --- round 8: capped error text, hostile rule files, total translation, GeneratorExit ---------
+
+import time  # noqa: E402
+
+CAP = 600
+
+
+def _hunt(tmp_path, monkeypatch, body):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    _channel_engine(tmp_path / "eng", body)
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yml").write_text("title: a\n")
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    t0 = time.monotonic()
+    res = CliRunner().invoke(
+        app,
+        ["hunt", "--rules", str(rules), "--logs", str(logs), "--engine-home", str(tmp_path / "eng")],
+        env={"COLUMNS": "200"},
+    )
+    return res, time.monotonic() - t0
+
+
+@pytest.mark.parametrize("n", [100_000, 5_000_000])
+def test_huge_engine_message_is_capped_and_fast(tmp_path, monkeypatch, clean_modules, n):
+    res, dt = _hunt(tmp_path, monkeypatch, f"raise RuntimeError('A' * {n})")
+    assert res.exit_code == 1, res.output
+    assert res.output.count("A") <= CAP and "truncated" in res.output
+    assert dt < 5, dt
+
+
+def test_compile_error_message_itself_is_capped(tmp_path, monkeypatch, clean_modules):
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, "raise RuntimeError('B' * 100000)")
+    assert len(str(ei.value)) <= CAP + 40 and "truncated" in str(ei.value)
+
+
+def test_huge_engine_not_found_message_is_capped_in_hunt(tmp_path, monkeypatch, clean_modules):
+    body = "from sigmaforge.engine import EngineNotFoundError; raise EngineNotFoundError('C' * 1000000)"
+    res, dt = _hunt(tmp_path, monkeypatch, body)
+    assert res.exit_code == 3, res.output
+    assert res.output.count("C") <= CAP and dt < 5
+
+
+def test_hostile_class_property_exception_is_total(tmp_path, monkeypatch, clean_modules):
+    body = (
+        "class H(Exception):\n"
+        "            @property\n"
+        "            def __class__(self):\n"
+        f"                raise ValueError({HOSTILE_EXC!r})\n"
+        "        raise H()"
+    )
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, body)
+    assert str(ei.value) == "engine failed during compile"
+
+
+def test_generator_exit_is_translated_not_propagated(tmp_path, monkeypatch, clean_modules):
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, f"raise GeneratorExit({HOSTILE_EXC!r})")
+    _assert_no_raw(str(ei.value))
+    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+
+
+def test_engine_exit_0_with_empty_outfile_is_a_clean_failure(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text("")  # exits 0, writes nothing
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    monkeypatch.setattr("sigmaforge.ingest.compile.compile_ruleset", lambda *a, **k: ([], 0))
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    res = CliRunner().invoke(app, ["hunt", "--rules", str(tmp_path), "--logs", str(logs), "--engine-home", str(eng)])
+    assert res.exit_code == 1, res.output
+    assert "Detection engine failed" in res.output and "Traceback" not in res.output
+
+
+def test_backtest_hostile_rule_filename_with_invalid_yaml_is_one_clean_line(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    eng = tmp_path / "eng"
+    (eng / "Zircolite").mkdir(parents=True)
+    (eng / "Zircolite" / "zircolite.py").write_text("")
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a\x1b]0;PWNED\x07b‮.yml").write_text("title: [unclosed\n  x: : :\n")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    res = CliRunner().invoke(
+        app,
+        [
+            "backtest", "--rules", str(rules / "*.yml"), "--attack-corpus", str(tmp_path),
+            "--technique-map", str(tmp_path / "tm.json"), "--benign-sample", str(tmp_path / "b.jsonl"),
+            "--engine-home", str(eng),
+        ],
+        env={"COLUMNS": "300"},
+    )  # fmt: skip
+    assert res.exit_code == 4, res.output
+    _assert_no_raw(res.output)
+    assert "Traceback" not in res.output and "Cannot load rule file" in res.output and "invalid YAML" in res.output
+
+
+def test_pretty_exceptions_never_show_locals():
+    from sigmaforge.main import app
+
+    assert app.pretty_exceptions_show_locals is False

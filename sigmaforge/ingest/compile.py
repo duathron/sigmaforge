@@ -23,12 +23,13 @@ import shutil
 import sys
 import tempfile
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from sigmaforge.engine import EngineNotFoundError, require_engine_home
 from sigmaforge.ingest.zircolite_runner import EngineRunError
-from sigmaforge.safe_text import plain_safe
+from sigmaforge.safe_text import plain_safe, plain_safe_capped
 
 #: Zircolite pySigma pipeline name (matches the bundled snapshot's conversion).
 PIPELINE = "sysmon"
@@ -94,7 +95,7 @@ def _sanitizing_handler(stream) -> logging.Handler:
 def _translate(exc, err, out, caught, real_err) -> EngineCompileError | None:
     """The sanitized replacement for an engine exception (None: let it propagate unchanged).
     May raise on a hostile exception object; the caller turns that into a constant message."""
-    if isinstance(exc, KeyboardInterrupt | GeneratorExit):
+    if isinstance(exc, KeyboardInterrupt):
         return None
     parts = [err.getvalue(), out.getvalue(), "\n".join(str(w.message) for w in caught)]
     text = next((p.strip() for p in parts if p.strip()), "")
@@ -107,19 +108,20 @@ def _translate(exc, err, out, caught, real_err) -> EngineCompileError | None:
         # any exit inside the compile means no ruleset: never let it pass as success
         code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else "text")
         return EngineCompileError(f"engine exited during compile (code {code})")
-    return EngineCompileError(plain_safe(str(exc)))
+    return EngineCompileError(plain_safe_capped(str(exc)))
 
 
-@contextlib.contextmanager
-def _captured_engine_output() -> Iterator[None]:
-    """Capture the Python-level output channels of the in-process engine work (stdout, stderr, warnings) and
-    route the logging fallbacks (`logging.lastResort`, the root logger) through the sanitizer.
-    Everything is restored on exit. Success: captured text is discarded. Failure: a short
-    sanitized tail (5 lines / 600 chars) goes to the real stderr, then the engine's exception is
-    replaced by a package-owned `EngineCompileError` with a sanitized message (SystemExit with a
-    non-int code becomes SystemExit(1)). Scope: Python-level stdout/stderr, warnings and logging
-    (what Zircolite v3.7.6 uses). fd-level writes (os.write, sys.__stdout__/__stderr__), rebinding,
-    inherited-fd subprocesses and post-return threads/atexit are NOT captured (known open)."""
+def _run_captured(work: Callable[[], Any]) -> Any:
+    """Run `work` with the Python-level output channels of the in-process engine captured
+    (stdout, stderr, warnings) and the logging fallbacks (`logging.lastResort`, the root logger)
+    routed through the sanitizer. Everything is restored on exit. Success: captured text is
+    discarded. Failure: a short sanitized tail (5 lines / 600 chars) goes to the real stderr,
+    then the engine's exception is replaced by a package-owned `EngineCompileError` with a
+    sanitized, capped message (SystemExit included). Hand-rolled try/except, not a generator
+    context manager, so the translation is total even for an exception that breaks `isinstance`.
+    Scope: Python-level stdout/stderr, warnings and logging (what Zircolite v3.7.6 uses).
+    fd-level writes (os.write, sys.__stdout__/__stderr__), rebinding, inherited-fd subprocesses
+    and post-return threads/atexit are NOT captured (known open)."""
     real_err = sys.stderr
     out, err = io.StringIO(), io.StringIO()
     root = logging.getLogger()
@@ -134,7 +136,7 @@ def _captured_engine_output() -> Iterator[None]:
                 warnings.simplefilter("always")
                 logging.lastResort = last_resort
                 root.handlers = [_sanitizing_handler(real_err)]
-                yield
+                return work()
     except BaseException as exc:
         try:
             translated = _translate(exc, err, out, caught, real_err)
@@ -161,7 +163,8 @@ def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) ->
     _refuse_foreign_zircolite(engine)
     _ensure_engine_on_path(home)
     logger = _engine_logger()
-    with _captured_engine_output():
+
+    def work() -> tuple[list[dict], int]:
         from zircolite import config as zconfig
         from zircolite.config import RulesetConfig
         from zircolite.rules import RulesetHandler
@@ -186,4 +189,6 @@ def compile_ruleset(paths: list[Path], engine_home: str | Path | None = None) ->
             # .rulesets IS the converted Zircolite-format list (same shape as
             # rules_windows_sysmon.json). Deep-copy by re-serialising to be safe.
             ruleset = json.loads(json.dumps(handler.rulesets))
-    return ruleset, n_staged
+            return ruleset, n_staged
+
+    return _run_captured(work)

@@ -119,12 +119,16 @@ def run_shard(
     except subprocess.CalledProcessError as e:
         # stderr tail; stdout when the engine wrote nothing to stderr
         src = (e.stderr or "").strip() or (e.stdout or "").strip()
-        tail = "\n".join(src.splitlines()[-5:])[-600:]
+        tail = "\n".join(src.splitlines()[-5:])[-550:]  # + prefix stays inside the 600-char error cap
         raise EngineRunError(f"engine exited with status {e.returncode}: {tail}") from None
-    with open(out) as fh:
-        return parse_detections(
-            json.load(fh),
-            corpus_label=corpus_label,
-            file_technique_map=file_technique_map,
-            event_technique_out=event_technique_out,
-        )
+    try:
+        with open(out) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):  # exit 0 but no/invalid detection file: value-free message
+        raise EngineRunError("engine exited 0 but wrote no valid detection output") from None
+    return parse_detections(
+        doc,
+        corpus_label=corpus_label,
+        file_technique_map=file_technique_map,
+        event_technique_out=event_technique_out,
+    )

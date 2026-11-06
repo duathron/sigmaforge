@@ -93,7 +93,7 @@ Output: a Markdown report + a `*_manifest.json` (run_hash, corpus SHAs, aggregat
 | 1 | the engine failed: its process exited non-zero, or the in-process rule compile raised or exited (a short, sanitized tail of its output is shown) |
 | 2 | usage error (bad/missing flags) |
 | 3 | engine not found or `--engine-home` / `engine_home` empty — run `scripts/setup_engine.sh` (then `--engine-home`, config `engine_home` or `$SIGMAFORGE_HOME`) |
-| 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora |
+| 4 | corpus / required input missing, OR a run that would be pooled-recall (refused) — use `hunt` if you have no corpora; also `backtest` when a rule file cannot be read or parsed (one line naming the file) |
 | 5 | acceptance gate FAILED (engine fires ≠ scored fires) |
 
 Codes 3 and 4 are **teaching errors**: they name what to run and never print a
@@ -179,6 +179,11 @@ Known open: writes below the Python level are not captured (`os.write`, `sys.__s
 `sys.__stderr__`, rebinding of `sys.stdout`, subprocesses that inherit the file descriptors, and
 threads or `atexit` hooks that outlive the call). Only a malicious engine can use them, and a
 malicious engine already runs with your privileges.
+There is also no timeout on the engine subprocess: a hung engine hangs the command.
+
+Error messages from the engine are capped at 600 characters (a `[truncated]` marker shows a cut),
+and a detection file that is missing or not valid JSON after an exit status of 0 is reported as
+`Detection engine failed` (exit 1).
 
 **Untrusted rule text.** Rule titles and other rule-derived text are escaped at the terminal
 (Rich markup, control characters, line breaks) and in the Markdown report (control

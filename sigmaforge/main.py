@@ -16,10 +16,12 @@ from shipwright_kit.cli import build_typer
 
 from sigmaforge import __version__
 from sigmaforge.engine import EngineNotFoundError, resolve_engine_home
+from sigmaforge.ingest.ruleload import RuleLoadError
 from sigmaforge.ingest.zircolite_runner import EngineRunError
-from sigmaforge.safe_text import plain_safe
+from sigmaforge.safe_text import plain_safe, plain_safe_capped
 
 app = build_typer("sigmaforge", "Honest Sigma-rule backtest harness", version=__version__)
+app.pretty_exceptions_show_locals = False  # a traceback must never dump locals (rule text, paths)
 console = Console(emoji=False)
 
 
@@ -42,16 +44,22 @@ def manual() -> None:
     console.print(Markdown(text))
 
 
+def _err_safe(x: object) -> str:
+    """An untrusted ERROR message for a Rich sink: single line, sanitized, capped at 600 characters
+    (a multi-megabyte message must not hang the console)."""
+    return escape(plain_safe_capped(x))
+
+
 def _engine_refused(err: Exception) -> NoReturn:
     """The engine could not be used safely (e.g. a foreign `zircolite` already imported)."""
-    console.print(f"[red]Detection engine refused[/red]: {_rich_safe(err)}", soft_wrap=True)
+    console.print(f"[red]Detection engine refused[/red]: {_err_safe(err)}", soft_wrap=True, highlight=False)
     console.print("Point --engine-home / SIGMAFORGE_HOME at the engine root, in a fresh process.")
     raise typer.Exit(3) from None
 
 
 def _engine_failed(err: Exception) -> NoReturn:
     """The engine ran but failed. Its output is captured, never streamed; show a short tail."""
-    console.print(f"[red]Detection engine failed[/red]: {_rich_safe(err)}", soft_wrap=True)
+    console.print(f"[red]Detection engine failed[/red]: {_err_safe(err)}", soft_wrap=True, highlight=False)
     raise typer.Exit(1) from None
 
 
@@ -156,10 +164,15 @@ def backtest(
         _engine_refused(e)
     except EngineRunError as e:
         _engine_failed(e)
+    except RuleLoadError as e:
+        console.print(
+            f"[red]Cannot load rule file[/red] {_rich_safe(e.path)}: {_err_safe(e)}", soft_wrap=True, highlight=False
+        )
+        raise typer.Exit(4) from None
     except AssertionError as e:
         # FIX H acceptance gate FAILED — a real engine/scored discrepancy. Surface as the
         # canonical gate-FAIL exit code, not a traceback.
-        console.print(f"[red]Acceptance gate FAILED[/red]: {_rich_safe(e)}", soft_wrap=True)
+        console.print(f"[red]Acceptance gate FAILED[/red]: {_err_safe(e)}", soft_wrap=True, highlight=False)
         raise typer.Exit(5) from None
 
     # Never silently pooled-recall: refuse a run that fell back to the pooled denominator.
