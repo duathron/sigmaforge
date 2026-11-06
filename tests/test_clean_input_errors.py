@@ -1381,7 +1381,7 @@ def _out_shapes(tmp_path):
         "directory": (d, "is a directory"),
         "readonly_dir": (ro / "r.md", "not writable"),
         "under_a_file": (f / "sub" / "r.md", "not writable"),
-        "long_name": (tmp_path / ("n" * 5000), "not writable"),
+        "long_name": (tmp_path / ("n" * 5000), "name too long"),
         "readonly_existing_report": (rof, "not writable"),
         "manifest_sibling_is_dir": (tmp_path / "m.md", "is a directory"),
     }
@@ -1423,15 +1423,20 @@ def test_unusable_out_is_a_clean_line_in_a_real_subprocess(tmp_path):
     assert "Cannot write output" in p.stdout and "Traceback" not in p.stdout + p.stderr
 
 
-def test_a_write_failure_after_the_run_is_one_clean_line(tmp_path, engine_calls, monkeypatch):
-    real = Path.write_text
+def _fail_open_for(monkeypatch, predicate):
+    """os.open fails with a disk-full error (carrying a secret) for the paths the predicate selects."""
+    real = os.open
 
-    def flaky(self, *a, **k):
-        if self.name == "late.md":
+    def flaky(path, *a, **k):
+        if predicate(os.fspath(path)):
             raise OSError(28, "No space left on device: SECRETVAL")
-        return real(self, *a, **k)
+        return real(path, *a, **k)
 
-    monkeypatch.setattr(Path, "write_text", flaky)
+    monkeypatch.setattr("os.open", flaky)
+
+
+def test_a_write_failure_after_the_run_is_one_clean_line(tmp_path, engine_calls, monkeypatch):
+    _fail_open_for(monkeypatch, lambda p: p.endswith("late.md"))
     res = _bt_out(tmp_path, tmp_path / "late.md")
     assert engine_calls  # the run happened; only the write failed
     assert res.exit_code == 2 and "Cannot write output" in res.output and "Traceback" not in res.output
@@ -1439,14 +1444,7 @@ def test_a_write_failure_after_the_run_is_one_clean_line(tmp_path, engine_calls,
 
 
 def test_a_manifest_write_failure_after_the_run_is_one_clean_line(tmp_path, engine_calls, monkeypatch):
-    real = Path.write_text
-
-    def flaky(self, *a, **k):
-        if self.name.endswith(".manifest.json"):
-            raise OSError(28, "No space left on device: SECRETVAL")
-        return real(self, *a, **k)
-
-    monkeypatch.setattr(Path, "write_text", flaky)
+    _fail_open_for(monkeypatch, lambda p: p.endswith("ok.manifest.json"))
     res = _bt_out(tmp_path, tmp_path / "ok.md")
     assert res.exit_code == 2 and "Cannot write output" in res.output and "secretval" not in res.output.lower()
     assert len(res.output.strip().splitlines()) == 1
@@ -1503,14 +1501,7 @@ def test_hunt_out_under_a_file_is_refused_before_the_engine(tmp_path, monkeypatc
 
 
 def test_hunt_write_failure_after_the_run_is_one_clean_line(tmp_path, monkeypatch):
-    real = Path.write_text
-
-    def flaky(self, *a, **k):
-        if self.name == "late.json":
-            raise OSError(28, "SECRETVAL")
-        return real(self, *a, **k)
-
-    monkeypatch.setattr(Path, "write_text", flaky)
+    _fail_open_for(monkeypatch, lambda p: p.endswith("late.json"))
     res, calls = _hunt(tmp_path, tmp_path / "late.json", monkeypatch)
     assert calls and res.exit_code == 2 and "Cannot write output" in res.output
     assert "secretval" not in res.output.lower() and len(res.output.strip().splitlines()) == 1
@@ -1541,3 +1532,179 @@ def test_out_with_an_invalid_utf8_name_never_crashes_the_message(tmp_path, engin
     res.output.encode("utf-8")  # no lone surrogate reached the terminal
     if res.exit_code == 2:
         assert "Cannot write output" in res.output and len(res.output.strip().splitlines()) == 1
+
+
+# --- #33 round 2: non-regular output targets, empty names, name-length boundary -------------------
+
+
+def _tool_subprocess(tmp_path, tool, out, timeout=30):
+    """backtest or hunt in a child process (a hang fails the test instead of the suite)."""
+    ins = _inputs(tmp_path)
+    rules = tmp_path / "ok-rules.yml"
+    rules.write_text("title: t\nlevel: low\n")
+    if tool == "backtest":
+        args = [
+            sys.executable, "-m", "sigmaforge.main", "backtest", "--rules", str(rules),
+            "--attack-corpus", str(tmp_path), "--technique-map", str(ins["tm"]), "--benign-sample", str(ins["bs"]),
+            "--comiset-mapping", str(ins["cm"]), "--engine-home", str(_engine(tmp_path)), "--out", str(out),
+        ]  # fmt: skip
+    else:
+        args = [
+            sys.executable, "-m", "sigmaforge.main", "hunt", "--rules", str(rules), "--logs", str(tmp_path),
+            "--engine-home", str(_engine(tmp_path)), "--out", str(out),
+        ]  # fmt: skip
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "COLUMNS": "300"}
+    env.pop("SIGMAFORGE_HOME", None)
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+def _assert_refused_proc(p, reason):
+    assert p.returncode == 2, (p.returncode, p.stdout[:400], p.stderr[:400])
+    assert "Cannot write output" in p.stdout and reason in p.stdout and "Traceback" not in p.stdout + p.stderr
+    assert len(p.stdout.strip().splitlines()) == 1
+
+
+@posix_only
+@pytest.mark.parametrize("tool", ["backtest", "hunt"])
+def test_fifo_as_out_is_refused_before_the_run(tmp_path, tool):
+    fifo = tmp_path / "out-fifo"
+    os.mkfifo(fifo)
+    _assert_refused_proc(_tool_subprocess(tmp_path, tool, fifo), "not a regular file")
+
+
+@posix_only
+def test_fifo_as_the_manifest_sibling_is_refused_before_the_run(tmp_path):
+    os.mkfifo(tmp_path / "rep.manifest.json")
+    _assert_refused_proc(_tool_subprocess(tmp_path, "backtest", tmp_path / "rep.md"), "not a regular file")
+
+
+@posix_only
+def test_symlink_to_a_fifo_is_refused_and_dangling_symlink_is_refused(tmp_path):
+    os.mkfifo(tmp_path / "real-fifo")
+    os.symlink(tmp_path / "real-fifo", tmp_path / "link-fifo")
+    _assert_refused_proc(_tool_subprocess(tmp_path, "hunt", tmp_path / "link-fifo"), "not a regular file")
+    os.symlink(tmp_path / "nowhere", tmp_path / "dangling")
+    _assert_refused_proc(_tool_subprocess(tmp_path, "hunt", tmp_path / "dangling"), "not a regular file")
+
+
+def test_symlink_to_a_regular_file_is_followed_and_written(tmp_path, engine_calls):
+    target = tmp_path / "target.md"
+    target.write_text("old")
+    link = tmp_path / "link.md"
+    os.symlink(target, link)
+    res = _bt_out(tmp_path, link)
+    assert res.exit_code == 0 and target.read_text() == "# r\n", res.output
+    assert link.is_symlink()
+
+
+@posix_only
+def test_write_output_never_blocks_on_a_fifo_swapped_in_after_the_preflight(tmp_path):
+    fifo = tmp_path / "late-fifo"
+    os.mkfifo(fifo)
+    code = (
+        "import sys, typer\nfrom pathlib import Path\nfrom sigmaforge.main import _write_output\n"
+        "try:\n    _write_output(Path(sys.argv[1]), 'x')\nexcept (typer.Exit, SystemExit) as e:\n    print('refused')\n"
+    )
+    p = subprocess.run([sys.executable, "-c", code, str(fifo)], capture_output=True, text=True, timeout=20)
+    assert "refused" in p.stdout and "Cannot write output" in p.stdout, (p.stdout, p.stderr)
+
+
+def test_write_output_writes_exact_bytes_and_truncates_a_longer_old_file(tmp_path):
+    from sigmaforge.main import _write_output
+
+    f = tmp_path / "w.txt"
+    f.write_text("a long old content that must vanish")
+    _write_output(f, "new \ud800 text", encoding="utf-8", errors="backslashreplace")
+    assert f.read_bytes() == b"new \\ud800 text"
+    g = tmp_path / "sub-new.txt"
+    _write_output(g, "é")
+    assert g.read_bytes() == "é".encode()
+
+
+@pytest.mark.parametrize("tool", ["backtest", "hunt"])
+@pytest.mark.parametrize("out", ["", ".", "/", ".."])
+def test_empty_or_root_out_names_are_one_clean_line(tmp_path, tool, out):
+    _assert_refused_proc(_tool_subprocess(tmp_path, tool, out), "no file name")
+
+
+def _name_ok(tmp_path, tool, stem_len, ext):
+    return _tool_subprocess(tmp_path, tool, tmp_path / ("s" * stem_len + ext))
+
+
+def test_name_length_boundary_backtest_counts_the_manifest_sibling(tmp_path, monkeypatch):
+    nm = os.pathconf(tmp_path, "PC_NAME_MAX")
+    manifest_extra = len(".manifest.json") - len(".md")
+    p = _name_ok(tmp_path, "backtest", nm - len(".manifest.json"), ".md")
+    assert "Cannot write output" not in p.stdout, (p.stdout, p.stderr)  # both real names fit exactly
+    p = _name_ok(tmp_path, "backtest", nm - len(".manifest.json") + 1, ".md")
+    _assert_refused_proc(p, "name too long")
+    assert manifest_extra > 0
+
+
+def test_name_length_boundary_hunt(tmp_path):
+    nm = os.pathconf(tmp_path, "PC_NAME_MAX")
+    p = _tool_subprocess(tmp_path, "hunt", tmp_path / ("n" * (nm - len(".json")) + ".json"))
+    assert "Cannot write output" not in p.stdout, (p.stdout, p.stderr)
+    p = _tool_subprocess(tmp_path, "hunt", tmp_path / ("n" * (nm - len(".json") + 1) + ".json"))
+    _assert_refused_proc(p, "name too long")
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs a non-root POSIX user")
+def test_existing_writable_files_in_a_readonly_dir_skip_the_directory_probe(tmp_path, engine_calls):
+    d = tmp_path / "rodir2"
+    d.mkdir()
+    (d / "r.md").write_text("old")
+    (d / "r.manifest.json").write_text("old")
+    d.chmod(0o555)
+    try:
+        res = _bt_out(tmp_path, d / "r.md")
+    finally:
+        d.chmod(0o755)
+    assert res.exit_code == 0, res.output
+    assert (d / "r.md").read_text() == "# r\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs a non-root POSIX user")
+def test_a_missing_manifest_sibling_in_a_readonly_dir_is_still_refused(tmp_path, engine_calls):
+    d = tmp_path / "rodir3"
+    d.mkdir()
+    (d / "r.md").write_text("old")  # report exists and is writable, but the manifest would need a new file
+    d.chmod(0o555)
+    try:
+        res = _bt_out(tmp_path, d / "r.md")
+    finally:
+        d.chmod(0o755)
+    _assert_out_refused(res, engine_calls, "not writable")
+
+
+def test_only_the_manifest_sibling_name_too_long_is_refused_in_process(tmp_path, engine_calls):
+    nm = os.pathconf(tmp_path, "PC_NAME_MAX")
+    out = tmp_path / ("s" * (nm - len(".manifest.json") + 1) + ".md")  # report fits, sibling does not
+    assert len(out.name) <= nm
+    _assert_out_refused(_bt_out(tmp_path, out), engine_calls, "name too long")
+
+
+@posix_only
+def test_write_output_refuses_a_fifo_that_has_a_reader_by_its_type(tmp_path):
+    from sigmaforge.main import _write_output
+
+    fifo = tmp_path / "rd-fifo"
+    os.mkfifo(fifo)
+    rfd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)  # a reader exists, so the open for writing succeeds
+    try:
+        with pytest.raises(BaseException) as ei:
+            _write_output(fifo, "data")
+        assert "Exit" in type(ei.value).__name__
+        assert os.read(rfd, 100) == b""  # nothing was written into the pipe
+    finally:
+        os.close(rfd)
+
+
+def test_write_output_loops_over_short_writes(tmp_path, monkeypatch):
+    from sigmaforge.main import _write_output
+
+    real = os.write
+    monkeypatch.setattr("os.write", lambda fd, data: real(fd, bytes(data[:3])))
+    f = tmp_path / "short.txt"
+    _write_output(f, "0123456789abcdef")
+    assert f.read_bytes() == b"0123456789abcdef"

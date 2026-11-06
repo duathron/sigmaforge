@@ -7,6 +7,7 @@ Exit-code table (canonical, owned here):
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -59,31 +60,72 @@ def _output_refused(path: object, reason: str) -> NoReturn:
     raise typer.Exit(2) from None
 
 
-def _check_output(out: str, sibling_suffix: str | None = None) -> Path:
-    """Verify the output location BEFORE the (long) run: refuse a directory, an unwritable parent or
-    existing file, a name the filesystem rejects. A probe file with the LONGEST name we will write is
-    created in the parent and removed by the stdlib on close. Returns the output path."""
-    path = Path(out)
-    names = [path.name] + ([path.with_suffix(sibling_suffix).name] if sibling_suffix else [])
+def _name_max(parent: Path) -> int:
     try:
+        return os.pathconf(parent, "PC_NAME_MAX")
+    except (OSError, ValueError, AttributeError):
+        return 255
+
+
+def _target_state(t: Path) -> str:
+    """'ok' (a regular file, or absent and creatable), or the reason it is refused. Symlinks are
+    FOLLOWED: the final target must be a regular file or must not exist (a dangling link is refused)."""
+    try:
+        st = os.stat(t)
+    except FileNotFoundError:
+        return "not a regular file" if os.path.islink(t) else "ok"
+    if stat.S_ISDIR(st.st_mode):
+        return "is a directory"
+    if not stat.S_ISREG(st.st_mode):  # FIFO, device (/dev/null), socket
+        return "not a regular file"
+    return "ok" if os.access(t, os.W_OK) else "not writable"
+
+
+def _check_output(out: str, sibling_suffix: str | None = None) -> Path:
+    """Verify the output location BEFORE the (long) run: refuse an empty/root name, a non-regular
+    target (directory, FIFO, device, socket, dangling link), an unwritable parent or file, and a name
+    longer than the filesystem allows. A short probe file proves the directory is writable (the
+    stdlib removes it on close). Returns the output path."""
+    path = Path(out)
+    try:
+        if path.name in ("", ".."):  # Path(".") and Path("/") have the name ""
+            _output_refused(out, "no file name")
         targets = [path] + ([path.with_suffix(sibling_suffix)] if sibling_suffix else [])
-        if any(t.is_dir() for t in targets):
-            _output_refused(out, "is a directory")
         parent = path.parent if str(path.parent) else Path(".")
         parent.mkdir(parents=True, exist_ok=True)
-        if any(t.exists() and not os.access(t, os.W_OK) for t in targets):
-            _output_refused(out, "not writable")
-        with tempfile.NamedTemporaryFile(dir=parent, prefix=max(names, key=len)):
-            pass
+        limit = _name_max(parent)
+        if any(len(os.fsencode(t.name)) > limit for t in targets):
+            _output_refused(out, "name too long")
+        states = [_target_state(t) for t in targets]
+        for state in states:
+            if state != "ok":
+                _output_refused(out, state)
+        if not all(os.path.exists(t) for t in targets):
+            # a file still to be created needs a writable directory; when every target already exists
+            # (and passed the regular-file and writable checks above) the directory itself may be read-only
+            with tempfile.NamedTemporaryFile(dir=parent, prefix=".sigmaforge-probe-"):
+                pass
     except (OSError, ValueError):
         _output_refused(out, "not writable")
     return path
 
 
-def _write_output(path: Path, text: str, **kw: object) -> None:
-    """Write one output file; a failure is one value-free line (exit 2), never a traceback."""
+def _write_output(path: Path, text: str, encoding: str = "utf-8", errors: str = "strict") -> None:
+    """Write one output file; a failure is one value-free line (exit 2), never a traceback or a hang.
+    The file is opened non-blocking and checked with fstat BEFORE it is truncated, so a FIFO swapped in
+    after the preflight is refused instead of blocking. Symlinks are followed (as in the preflight)."""
     try:
-        path.write_text(text, **kw)
+        data = text.encode(encoding, errors)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0), 0o644)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                _output_refused(path, "not a regular file")
+            os.ftruncate(fd, 0)
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view) :]
+        finally:
+            os.close(fd)
     except (OSError, ValueError):
         _output_refused(path, "not writable")
 
