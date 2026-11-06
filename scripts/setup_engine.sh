@@ -11,6 +11,7 @@
 # requirements.txt against the lock, and only then renames the old directory aside
 # (Zircolite.old.<timestamp>, never deleted) and the new one into place. Dependencies are
 # installed from scripts/zircolite-requirements.lock with `--require-hashes`.
+# Leftovers: Zircolite.setup.* after a failed clone/verification, Zircolite.old.* after every run (both git-ignored).
 # sigmaforge does not re-verify the engine at run time: this is a setup-time check only; whoever
 # can write to the engine directory afterwards can run code as you.
 set -euo pipefail
@@ -50,12 +51,17 @@ if [ -z "$want" ] || [ "$want" != "$have" ]; then
     exit 1
 fi
 
-if [ -e "$DEST" ]; then
+chmod 755 "$NEW"  # mktemp creates 0700; the verified engine directory should be readable like a normal checkout
+
+if [ -e "$DEST" ] || [ -L "$DEST" ]; then
     ASIDE="$DEST.old.$(date +%Y%m%d%H%M%S).$$"
     mv "$DEST" "$ASIDE"
     echo "[setup] the previous $DEST was NOT trusted and was moved aside to $ASIDE (delete it yourself if you do not need it)."
 fi
-mv "$NEW" "$DEST"
+mv "$NEW" "$DEST" || {
+    echo "[setup] ERROR: could not move '$NEW' into place as '$DEST'; your previous engine, if any, is at '${ASIDE:-}' (mv it back to '$DEST')." >&2
+    exit 1
+}
 
 echo "[setup] installing Zircolite runtime requirements (hash-checked) into the uv env ..."
 uv pip install --require-hashes -r "$LOCK"

@@ -42,6 +42,9 @@ ruleset).
 `setup_engine.sh` always clones the pinned engine fresh (commit, tree and hash-locked requirements are
 verified) and moves an existing `Zircolite/` aside to `Zircolite.old.<timestamp>`. sigmaforge does not
 re-verify the engine at run time; the check is setup-time only.
+Setup needs network access on every run. Leftovers: `Zircolite.setup.*` after a failed clone or
+verification and `Zircolite.old.*` after each run (remove them yourself when not needed). The installed
+`Zircolite/` directory gets mode 0755.
 
 ## Commands
 

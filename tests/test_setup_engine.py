@@ -50,11 +50,25 @@ def _setup(tmp_path, lock_sha=None):
     return bindir, scripts, work
 
 
-def _run(tmp_path, head=GOOD_SHA, tree=GOOD_TREE, lock_sha=None, uv_exit=0, extra_env=None, existing=None):
+def _run(
+    tmp_path,
+    head=GOOD_SHA,
+    tree=GOOD_TREE,
+    lock_sha=None,
+    uv_exit=0,
+    extra_env=None,
+    existing=None,
+    pre=None,
+    bin_hook=None,
+):
     """Run the script in tmp/work. `existing(dir)` populates a pre-existing Zircolite/."""
     bindir, scripts, work = _setup(tmp_path, lock_sha)
     if uv_exit:
         (bindir / "uv").write_text(f'#!/bin/bash\necho "uv $*" >> "$SHIM_LOG"\nexit {uv_exit}\n')
+    if bin_hook:
+        bin_hook(bindir)
+    if pre:
+        pre(work)
     if existing:
         (work / "Zircolite").mkdir()
         existing(work / "Zircolite")
@@ -195,3 +209,42 @@ def test_lock_every_requirement_carries_hashes():
         elif "--hash=sha256:" in ln:
             cur["hashes"] += 1
     assert blocks and all(b["hashes"] >= 1 for b in blocks), [b["req"] for b in blocks if b["hashes"] < 1]
+
+
+def test_setup_engine_replaces_a_dangling_symlink(tmp_path):
+    res, log, work = _run(tmp_path, existing=None, pre=lambda w: (w / "Zircolite").symlink_to(w / "nonexistent"))
+    assert res.returncode == 0, res.stderr + res.stdout
+    assert (work / "Zircolite").is_dir() and not (work / "Zircolite").is_symlink()
+    aside = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
+    assert len(aside) == 1 and aside[0].is_symlink()  # the link itself was moved aside, not followed
+
+
+def test_setup_engine_failed_swap_names_both_paths_and_does_not_claim_done(tmp_path):
+    def failing_second_mv(bindir):
+        (bindir / "mv").write_text(
+            '#!/bin/bash\nn=$(cat "$SHIM_LOG.mv" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$SHIM_LOG.mv"\n'
+            '[ "$n" -ge 2 ] && exit 1\nexec /bin/mv "$@"\n'
+        )
+        (bindir / "mv").chmod(0o755)
+
+    res, log, work = _run(tmp_path, existing=lambda d: (d / "keep.txt").write_text("mine"), bin_hook=failing_second_mv)
+    assert res.returncode != 0 and "done" not in res.stdout
+    aside = [p for p in work.iterdir() if p.name.startswith("Zircolite.old.")]
+    assert len(aside) == 1 and (aside[0] / "keep.txt").exists()
+    msg = res.stderr
+    assert "could not move" in msg and str(aside[0].name) in msg and "Zircolite.setup." in msg
+    assert not _uv_installs(log)
+
+
+def test_setup_engine_installed_directory_is_world_readable(tmp_path):
+    res, log, work = _run(tmp_path)
+    assert res.returncode == 0
+    assert (work / "Zircolite").stat().st_mode & 0o777 == 0o755
+
+
+def test_setup_leftovers_are_gitignored_and_documented():
+    ignored = (ROOT / ".gitignore").read_text().splitlines()
+    assert "/Zircolite.old.*" in ignored and "/Zircolite.setup.*" in ignored
+    for doc in ("README.md", "sigmaforge/MANUAL.md"):
+        text = (ROOT / doc).read_text()
+        assert "Zircolite.setup." in text and "network" in text and "0755" in text, doc
