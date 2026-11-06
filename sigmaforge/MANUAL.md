@@ -167,11 +167,18 @@ prefer an absolute path. Do not set them from untrusted input.
 **Engine output is not streamed.** The engine subprocess's stdout and stderr are captured: rule
 titles are untrusted text and the engine echoes them. On success nothing from the engine is
 printed; on failure only a short sanitized tail of its stderr (stdout when stderr is empty) is
-shown. While the rule compiler runs in-process, everything the engine prints (stdout, stderr,
-warnings) is captured and discarded on success, and log records (the engine's own loggers, the
-root logger and loggers without handlers) are flattened to one line and stripped of control
-characters before they reach stderr. If the compile fails, a short sanitized tail of the captured
-text is printed to stderr.
+shown. While the rule compiler runs in-process, its Python-level stdout and stderr, warnings and
+logging (what Zircolite v3.7.6 uses) are captured: output is discarded on success, and log records
+(the engine's own loggers, the root logger and loggers without handlers) are flattened to one line
+and stripped of control characters before they reach stderr. If the compile fails, a short
+sanitized tail of the captured text is printed to stderr and `hunt` reports
+`Detection engine failed` with a sanitized one-line message (exit 1); the engine's own exception
+text is never printed raw.
+
+Known open: writes below the Python level are not captured (`os.write`, `sys.__stdout__` /
+`sys.__stderr__`, rebinding of `sys.stdout`, subprocesses that inherit the file descriptors, and
+threads or `atexit` hooks that outlive the call). Only a malicious engine can use them, and a
+malicious engine already runs with your privileges.
 
 **Untrusted rule text.** Rule titles and other rule-derived text are escaped at the terminal
 (Rich markup, control characters, line breaks) and in the Markdown report (control

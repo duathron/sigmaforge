@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from sigmaforge.engine import EngineNotFoundError, require_engine_home
+from sigmaforge.ingest.zircolite_runner import EngineRunError
 from sigmaforge.safe_text import plain_safe
 
 #: Zircolite pySigma pipeline name (matches the bundled snapshot's conversion).
@@ -79,6 +80,11 @@ def _engine_logger() -> logging.Logger:
     return logging.getLogger("compile_loaded_ruleset")
 
 
+class EngineCompileError(EngineRunError):
+    """The in-process rule compiler raised. The message is already sanitized (single line, no
+    control characters): the engine's own exception text is rule-derived, so it is never re-raised."""
+
+
 def _sanitizing_handler(stream) -> logging.Handler:
     handler = logging.StreamHandler(stream)
     handler.setFormatter(_SanitizingFormatter())
@@ -87,10 +93,14 @@ def _sanitizing_handler(stream) -> logging.Handler:
 
 @contextlib.contextmanager
 def _captured_engine_output() -> Iterator[None]:
-    """Capture EVERY output channel of the in-process engine work (stdout, stderr, warnings) and
+    """Capture the Python-level output channels of the in-process engine work (stdout, stderr, warnings) and
     route the logging fallbacks (`logging.lastResort`, the root logger) through the sanitizer.
     Everything is restored on exit. Success: captured text is discarded. Failure: a short
-    sanitized tail (5 lines / 600 chars) goes to the real stderr before the error propagates."""
+    sanitized tail (5 lines / 600 chars) goes to the real stderr, then the engine's exception is
+    replaced by a package-owned `EngineCompileError` with a sanitized message (SystemExit with a
+    non-int code becomes SystemExit(1)). Scope: Python-level stdout/stderr, warnings and logging
+    (what Zircolite v3.7.6 uses). fd-level writes (os.write, sys.__stdout__/__stderr__), rebinding,
+    inherited-fd subprocesses and post-return threads/atexit are NOT captured (known open)."""
     real_err = sys.stderr
     out, err = io.StringIO(), io.StringIO()
     root = logging.getLogger()
@@ -106,12 +116,20 @@ def _captured_engine_output() -> Iterator[None]:
                 logging.lastResort = last_resort
                 root.handlers = [_sanitizing_handler(real_err)]
                 yield
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt | GeneratorExit):
+            raise
         parts = [err.getvalue(), out.getvalue(), "\n".join(str(w.message) for w in caught)]
         text = next((p.strip() for p in parts if p.strip()), "")
         tail = "\n".join(text.splitlines()[-5:])[-600:]
         if tail:
             real_err.write(plain_safe(tail) + "\n")
+        if isinstance(exc, EngineNotFoundError) or (isinstance(exc, SystemExit) and isinstance(exc.code, int | None)):
+            raise
+        if isinstance(exc, SystemExit):
+            raise SystemExit(1) from None
+        if isinstance(exc, Exception):
+            raise EngineCompileError(plain_safe(str(exc))) from None
         raise
     finally:
         root.handlers = saved_root_handlers

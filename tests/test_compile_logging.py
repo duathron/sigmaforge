@@ -2,6 +2,8 @@ import sys
 
 import pytest
 
+from sigmaforge.ingest.compile import EngineCompileError
+
 
 def _engine(root, log_line):
     pkg = root / "Zircolite" / "zircolite"
@@ -144,7 +146,7 @@ def test_failure_reemits_a_sanitized_tail_and_restores_state(tmp_path, monkeypat
     import logging
 
     root_handlers, last_resort = list(logging.getLogger().handlers), logging.lastResort
-    with pytest.raises(RuntimeError):
+    with pytest.raises(EngineCompileError):
         _compile(tmp_path, monkeypatch, CHANNELS[channel] % EVIL, "raise RuntimeError('boom')")
     cap = capfd.readouterr()
     _assert_clean(cap)
@@ -154,14 +156,14 @@ def test_failure_reemits_a_sanitized_tail_and_restores_state(tmp_path, monkeypat
 
 def test_failure_tail_is_bounded(tmp_path, monkeypatch, capfd, clean_modules):
     body = "print(*[f'LINE{i:02d}' + 'q' * 300 for i in range(20)], sep='\\n', file=sys.stderr)"
-    with pytest.raises(RuntimeError):
+    with pytest.raises(EngineCompileError):
         _compile(tmp_path, monkeypatch, body, "raise RuntimeError('x')")
     err = capfd.readouterr().err
     assert len(err.splitlines()) <= 5 and err.count("q") <= 600 and "LINE19" in err
 
 
 def test_failure_tail_prefers_stderr_over_stdout(tmp_path, monkeypatch, capfd, clean_modules):
-    with pytest.raises(RuntimeError):
+    with pytest.raises(EngineCompileError):
         _compile(
             tmp_path, monkeypatch, "print('FROM_OUT'); print('FROM_ERR', file=sys.stderr)", "raise RuntimeError('x')"
         )
@@ -189,3 +191,87 @@ def test_basicconfig_is_not_re_added_after_the_engine_logger(tmp_path, monkeypat
 def test_lastresort_records_surface_sanitized(tmp_path, monkeypatch, capfd, clean_modules):
     _compile(tmp_path, monkeypatch, CHANNELS["C2_lastresort_no_propagate"] % EVIL)
     assert capfd.readouterr().err.splitlines() == ["e 31m PASS forged"]
+
+
+# --- raw engine exceptions are replaced by a sanitized, package-owned error -------------------
+
+
+def _assert_no_raw(text):
+    assert "\x1b" not in text and "\x07" not in text and "‮" not in text
+    assert not any(0x80 <= ord(c) <= 0x9F for c in text)
+    assert not any(ln.startswith("PASS") for ln in text.splitlines())
+
+
+HOSTILE_EXC = "boom \x1b]0;PWN\x07\x1b[41m\x9b31m ‮\nPASS forged"
+
+
+def test_engine_exception_becomes_sanitized_compile_error(tmp_path, monkeypatch, clean_modules):
+    from sigmaforge.ingest.compile import EngineCompileError
+
+    with pytest.raises(EngineCompileError) as ei:
+        _compile(tmp_path, monkeypatch, f"raise RuntimeError({HOSTILE_EXC!r})")
+    _assert_no_raw(str(ei.value))
+    assert "\n" not in str(ei.value) and ei.value.__cause__ is None and ei.value.__suppress_context__
+
+
+def test_engine_system_exit_with_text_becomes_exit_1_and_tail_is_clean(tmp_path, monkeypatch, capfd, clean_modules):
+    with pytest.raises(SystemExit) as ei:
+        _compile(tmp_path, monkeypatch, f"print({HOSTILE_EXC!r}, file=sys.stderr); sys.exit({HOSTILE_EXC!r})")
+    assert ei.value.code == 1
+    cap = capfd.readouterr()
+    _assert_no_raw(cap.err)
+    assert "boom" in cap.err
+
+
+def test_engine_system_exit_with_int_code_is_unchanged(tmp_path, monkeypatch, clean_modules):
+    with pytest.raises(SystemExit) as ei:
+        _compile(tmp_path, monkeypatch, "sys.exit(7)")
+    assert ei.value.code == 7
+
+
+def test_keyboard_interrupt_propagates_unchanged(tmp_path, monkeypatch, clean_modules):
+    with pytest.raises(KeyboardInterrupt):
+        _compile(tmp_path, monkeypatch, "raise KeyboardInterrupt()")
+
+
+def test_engine_not_found_is_not_wrapped(tmp_path, monkeypatch, clean_modules):
+    from sigmaforge.engine import EngineNotFoundError
+
+    with pytest.raises(EngineNotFoundError):
+        _compile(
+            tmp_path, monkeypatch, "from sigmaforge.engine import EngineNotFoundError; raise EngineNotFoundError('x')"
+        )
+
+
+def test_hunt_reports_engine_compile_error_as_one_clean_line_exit_1(tmp_path, monkeypatch, clean_modules):
+    from typer.testing import CliRunner
+
+    from sigmaforge.main import app
+
+    _channel_engine(tmp_path / "eng", f"raise RuntimeError({HOSTILE_EXC!r})")
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yml").write_text("title: a\n")
+    logs = tmp_path / "l.jsonl"
+    logs.write_text("")
+    monkeypatch.delenv("SIGMAFORGE_HOME", raising=False)
+    monkeypatch.delenv("SIGMAFORGE_ZIRCOLITE", raising=False)
+    res = CliRunner().invoke(
+        app, ["hunt", "--rules", str(rules), "--logs", str(logs), "--engine-home", str(tmp_path / "eng")]
+    )
+    assert res.exit_code == 1, res.output
+    assert "Detection engine failed" in res.output and "Traceback" not in res.output
+    _assert_no_raw(res.output)
+
+
+def test_engine_logger_does_not_propagate_to_the_root_handler(tmp_path, monkeypatch, capfd, clean_modules):
+    _compile(tmp_path, monkeypatch, "logger.warning('once')")
+    assert capfd.readouterr().err.splitlines() == ["once"]
+
+
+def test_failure_tail_keeps_exactly_the_last_5_lines(tmp_path, monkeypatch, capfd, clean_modules):
+    body = "print(*[f'LINE{i:02d}' for i in range(20)], sep='\\n', file=sys.stderr)"
+    with pytest.raises(EngineCompileError):
+        _compile(tmp_path, monkeypatch, body, "raise RuntimeError('x')")
+    err = capfd.readouterr().err
+    assert [i for i in range(20) if f"LINE{i:02d}" in err] == [15, 16, 17, 18, 19]

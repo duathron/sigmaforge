@@ -245,6 +245,8 @@ def hunt(
         compiled, _n_staged = compile_ruleset(rule_files, engine_home=str(engine_root))
     except EngineNotFoundError as e:
         _engine_refused(e)
+    except EngineRunError as e:  # EngineCompileError: the in-process compile raised
+        _engine_failed(e)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(compiled, fh)
         ruleset_path = fh.name
