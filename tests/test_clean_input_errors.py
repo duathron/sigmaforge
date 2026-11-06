@@ -730,3 +730,88 @@ def test_sha256_file_enforces_the_cap_even_if_the_file_grows_after_fstat(monkeyp
     monkeypatch.setattr(pipeline, "open_regular", fake_open)
     with pytest.raises(pipeline.InputLoadError, match="too large"):
         pipeline._sha256_file("p", 10, "x")
+
+
+# --- fix round 4 -------------------------------------------------------------------------------
+
+
+def _rules_run(tmp_path, rules_file):
+    ins = _inputs(tmp_path)
+    args = [
+        "backtest", "--rules", str(rules_file), "--attack-corpus", str(tmp_path),
+        "--technique-map", str(ins["tm"]), "--benign-sample", str(ins["bs"]),
+        "--comiset-mapping", str(ins["cm"]), "--engine-home", str(_engine(tmp_path)),
+        "--out", str(tmp_path / "run.md"),
+    ]  # fmt: skip
+    return CliRunner().invoke(app, args, env={"COLUMNS": "300"})
+
+
+def test_deeply_nested_rule_yaml_is_one_clean_line(tmp_path):
+    d = tmp_path / HOSTILE
+    d.mkdir()
+    (d / "a.yml").write_text("x: " + "[" * 200_000)
+    res = _rules_run(tmp_path, d / "a.yml")
+    assert res.exit_code == 4 and "Cannot load rule file" in res.output and "too deeply nested" in res.output
+    assert "Traceback" not in res.output and len(res.output.strip().splitlines()) == 1
+
+
+def test_rule_file_with_invalid_utf8_is_unreadable(tmp_path):
+    d = tmp_path / HOSTILE
+    d.mkdir()
+    (d / "a.yml").write_bytes(b"title: \xff\xfe\x80\n")
+    res = _rules_run(tmp_path, d / "a.yml")
+    assert res.exit_code == 4 and "Cannot load rule file" in res.output and "unreadable" in res.output
+    assert "Traceback" not in res.output and len(res.output.strip().splitlines()) == 1
+
+
+def test_compiled_ruleset_json_gets_the_ruleset_cap_but_a_yaml_rule_keeps_one_mib(tmp_path):
+    from sigmaforge import pipeline
+
+    big = b" " * (pipeline.RULE_FILE_MAX_BYTES + 100) + b'{"title": "t", "level": "low"}'
+    j = tmp_path / "compiled.json"
+    j.write_bytes(big)
+    assert "too large" not in _rules_run(tmp_path, j).output
+    y = tmp_path / "rule.yml"
+    y.write_bytes(big)
+    res = _rules_run(tmp_path, y)
+    assert res.exit_code == 4 and "Cannot load rule file" in res.output and "too large" in res.output
+    j2 = tmp_path / "Compiled2.JSON"  # the suffix test is case-insensitive
+    j2.write_bytes(big)
+    assert "too large" not in _rules_run(tmp_path, j2).output
+
+
+def test_compiled_ruleset_json_over_the_ruleset_cap_is_refused(tmp_path, monkeypatch):
+    j = tmp_path / "compiled.json"
+    j.write_bytes(b"x" * 11)
+    monkeypatch.setattr("sigmaforge.pipeline.RULESET_HASH_MAX_BYTES", 10)
+    res = _rules_run(tmp_path, j)
+    assert res.exit_code == 4 and "too large" in res.output
+
+
+def test_ruleset_cap_value_is_pinned():
+    from sigmaforge import pipeline
+
+    assert pipeline.RULESET_HASH_MAX_BYTES == 64 * 1024 * 1024
+
+
+def test_manifest_ruleset_hash_call_site_enforces_the_cap(tmp_path, monkeypatch):
+    ins = _inputs(tmp_path)
+    monkeypatch.setattr("sigmaforge.pipeline.RULESET_HASH_MAX_BYTES", 5)  # the yml rule file is 22 bytes
+    res = _backtest(tmp_path, ins)
+    assert res.exit_code == 4, res.output
+    assert "Cannot load ruleset" in res.output and "too large" in res.output
+    assert len(res.output.strip().splitlines()) == 1
+
+
+def test_sha256_file_read_oserror_is_unreadable(monkeypatch):
+    import contextlib
+
+    from sigmaforge import pipeline
+
+    @contextlib.contextmanager
+    def fake_open(path, cap):
+        yield _Fake(fail=True)
+
+    monkeypatch.setattr(pipeline, "open_regular", fake_open)
+    with pytest.raises(pipeline.InputLoadError, match="unreadable"):
+        pipeline._sha256_file("p", 10, "x")

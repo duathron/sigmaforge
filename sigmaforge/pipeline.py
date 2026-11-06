@@ -218,7 +218,9 @@ def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
     rules = []
     for f in glob.glob(loaded_rules_glob):
         try:
-            text = read_capped(f, RULE_FILE_MAX_BYTES).decode("utf-8")
+            # a compiled ruleset (.json, passed as --rules) is far larger than one Sigma YAML rule
+            cap = RULESET_HASH_MAX_BYTES if f.lower().endswith(".json") else RULE_FILE_MAX_BYTES
+            text = read_capped(f, cap).decode("utf-8")
             for doc in yaml.safe_load_all(text):
                 if doc:
                     rules.append(doc)
@@ -226,6 +228,8 @@ def _load_loaded_rules(loaded_rules_glob: str) -> list[dict]:
             raise RuleLoadError(f, e.reason) from None
         except yaml.YAMLError:
             raise RuleLoadError(f, "invalid YAML") from None
+        except RecursionError:
+            raise RuleLoadError(f, "too deeply nested") from None
         except (OSError, ValueError):  # unreadable, or not valid text
             raise RuleLoadError(f, "unreadable") from None
     try:
