@@ -3,6 +3,24 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/).
 
+## [0.4.1](https://github.com/duathron/sigmaforge/compare/v0.4.0...v0.4.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **engine:** run the --engine-home engine, never one from the current directory ([#23](https://github.com/duathron/sigmaforge/issues/23)) ([b56a24d](https://github.com/duathron/sigmaforge/commit/b56a24d5d208887a0511dde540bc35f192adeecc))
+* escape untrusted rule text and capture engine output ([#26](https://github.com/duathron/sigmaforge/issues/26)) ([b57ab69](https://github.com/duathron/sigmaforge/commit/b57ab69f258385a7ca7e02ff65e62f5350bf5afe))
+* harden engine verification against loose modes, planted modules and special files ([#31](https://github.com/duathron/sigmaforge/issues/31)) ([74cd1e3](https://github.com/duathron/sigmaforge/commit/74cd1e3b9e6161ec236cd12a3ae1a858df82dd52))
+* pin and verify the Zircolite engine and stop writing scripts' files to /tmp ([#27](https://github.com/duathron/sigmaforge/issues/27)) ([655032c](https://github.com/duathron/sigmaforge/commit/655032c2947be156a7ce3419f1aaba5424643de3))
+* reject surrogate text and tighten the compiled ruleset cap ([#33](https://github.com/duathron/sigmaforge/issues/33)) ([4142e64](https://github.com/duathron/sigmaforge/commit/4142e646677bf2571d2f3859406c98b78bfa98a0))
+* report broken config and backtest inputs as one clean line ([#30](https://github.com/duathron/sigmaforge/issues/30)) ([d975875](https://github.com/duathron/sigmaforge/commit/d975875efe237983035e5b6236236bad8a40a255))
+* require shipwright-kit 0.12.1 (render and injection hardening) ([#20](https://github.com/duathron/sigmaforge/issues/20)) ([cb61234](https://github.com/duathron/sigmaforge/commit/cb612346c0e1302681385f92823c50eda757c05f))
+
+
+### Documentation
+
+* document engine resolution, config-relative paths and the engine trust boundary ([#25](https://github.com/duathron/sigmaforge/issues/25)) ([e11cf46](https://github.com/duathron/sigmaforge/commit/e11cf469add614dae9a90a239270faab3fcd463d))
+
 ## [0.4.0](https://github.com/duathron/sigmaforge/compare/v0.3.0...v0.4.0) (2026-06-23)
 
 
