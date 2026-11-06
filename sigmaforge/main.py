@@ -6,6 +6,8 @@ Exit-code table (canonical, owned here):
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -49,6 +51,41 @@ def _err_safe(x: object) -> str:
     """An untrusted ERROR message for a Rich sink: single line, sanitized, capped at 600 characters
     (a multi-megabyte message must not hang the console)."""
     return markup_escape(plain_safe_capped(x))
+
+
+def _output_refused(path: object, reason: str) -> NoReturn:
+    """The output location cannot be written. A bad `--out` is a usage error (exit 2)."""
+    console.print(f"[red]Cannot write output[/red] {_err_safe(path)}: {reason}", soft_wrap=True, highlight=False)
+    raise typer.Exit(2) from None
+
+
+def _check_output(out: str, sibling_suffix: str | None = None) -> Path:
+    """Verify the output location BEFORE the (long) run: refuse a directory, an unwritable parent or
+    existing file, a name the filesystem rejects. A probe file with the LONGEST name we will write is
+    created in the parent and removed by the stdlib on close. Returns the output path."""
+    path = Path(out)
+    names = [path.name] + ([path.with_suffix(sibling_suffix).name] if sibling_suffix else [])
+    try:
+        targets = [path] + ([path.with_suffix(sibling_suffix)] if sibling_suffix else [])
+        if any(t.is_dir() for t in targets):
+            _output_refused(out, "is a directory")
+        parent = path.parent if str(path.parent) else Path(".")
+        parent.mkdir(parents=True, exist_ok=True)
+        if any(t.exists() and not os.access(t, os.W_OK) for t in targets):
+            _output_refused(out, "not writable")
+        with tempfile.NamedTemporaryFile(dir=parent, prefix=max(names, key=len)):
+            pass
+    except (OSError, ValueError):
+        _output_refused(out, "not writable")
+    return path
+
+
+def _write_output(path: Path, text: str, **kw: object) -> None:
+    """Write one output file; a failure is one value-free line (exit 2), never a traceback."""
+    try:
+        path.write_text(text, **kw)
+    except (OSError, ValueError):
+        _output_refused(path, "not writable")
 
 
 def _engine_refused(err: Exception) -> NoReturn:
@@ -152,6 +189,8 @@ def backtest(
         )
         raise typer.Exit(3)
 
+    out_path = _check_output(out, ".manifest.json")
+
     evtx_cfg = str(engine_root / "Zircolite" / "config" / "fieldMappings.yaml")
     # The engine consumes a COMPILED ruleset JSON. C3.1 lifts an in-process compiler;
     # until then resolve a pre-compiled ruleset: a .json `rules` IS the compiled ruleset,
@@ -202,13 +241,11 @@ def backtest(
         )
         raise typer.Exit(4)
 
-    out_path = Path(out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     # backslashreplace: text that cannot be encoded (a lone surrogate) is written as an escape instead of
     # crashing after the whole engine run, and the report stays complete (no new exit code, no lost run)
-    out_path.write_text(res.report_md, encoding="utf-8", errors="backslashreplace")
+    _write_output(out_path, res.report_md, encoding="utf-8", errors="backslashreplace")
     manifest_path = out_path.with_suffix(".manifest.json")
-    manifest_path.write_text(json.dumps(res.manifest, indent=2, sort_keys=True))
+    _write_output(manifest_path, json.dumps(res.manifest, indent=2, sort_keys=True))
     console.print(f"report written: {_rich_safe(out_path)}", soft_wrap=True)
     console.print(f"manifest written: {_rich_safe(manifest_path)}", soft_wrap=True)
     console.print(
@@ -269,6 +306,8 @@ def hunt(
         )
         raise typer.Exit(3)
 
+    out_path = _check_output(out)
+
     rules_path = Path(rules)
     rule_files = sorted(rules_path.rglob("*.yml")) if rules_path.is_dir() else [rules_path]
 
@@ -313,10 +352,7 @@ def hunt(
         "hit_count": len(hits),
         "hits": hits,
     }
-    out_path = Path(out)
-    if out_path.parent != Path(""):
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+    _write_output(out_path, json.dumps(result, indent=2, sort_keys=True))
 
     console.print(f"[yellow]{_HUNT_BANNER}[/yellow]")
     console.print(

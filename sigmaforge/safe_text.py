@@ -10,7 +10,10 @@ _LINE_BREAKS = re.compile(r"[\r\n\t\x0b\x0c\x1c\x1d\x1e\x85  ]+")
 def plain_safe(x: object) -> str:
     """Line breaks and tabs flattened to a space, then control/ANSI/OSC/bidi characters stripped.
     No markup escaping: for plain sinks (logging to stderr). Rich sinks add `escape` on top."""
-    return safe_render(_LINE_BREAKS.sub(" ", str(x)), escape_markup=False)
+    out = safe_render(_LINE_BREAKS.sub(" ", str(x)), escape_markup=False)
+    # a path with invalid UTF-8 bytes decodes to lone surrogates (surrogateescape): they cannot be
+    # written to a terminal or log, so show them as an escape instead of crashing the error line
+    return out.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 #: Budget for any untrusted error message printed to a terminal (same as the stderr tail).
